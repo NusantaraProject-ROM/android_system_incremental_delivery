@@ -1,0 +1,49 @@
+cc_defaults {
+    name: "libincfs_defaults",
+    cpp_std: "c++2a",
+    cflags: ["-Werror", "-Wall", "-Wextra"],
+    defaults: ["linux_bionic_supported"],
+    export_include_dirs: ["include/", "kernel-headers",],
+    local_include_dirs: ["include/"],
+    header_libs: [
+        "libincfs_headers",
+    ],
+    export_header_lib_headers: ["libincfs_headers"],
+    static_libs: [
+        "libbase",
+    ],
+    shared_libs: [
+        "liblog",
+    ],
+}
+
+cc_library {
+    name: "libincfs",
+    defaults: ["libincfs_defaults"],
+    srcs: [
+        "incfs_ndk.c",
+        "incfs.cpp",
+        "MountRegistry.cpp",
+        "path.cpp",
+    ],
+}
+
+cc_library_headers {
+    name: "libincfs_headers",
+    export_include_dirs: ["include/", "kernel-headers",],
+}
+
+cc_test {
+    name: "libincfs-test",
+    cflags: ["-Werror", "-Wall", "-Wextra"],
+    static_libs: [
+        "libincfs",
+    ],
+    shared_libs: [
+        "libbase",
+    ],
+    srcs: [
+        "tests/incfs_test.cpp",
+    ],
+    require_root: true,
+}
