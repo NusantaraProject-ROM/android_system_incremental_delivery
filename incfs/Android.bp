@@ -15,6 +15,11 @@ cc_defaults {
     shared_libs: [
         "liblog",
     ],
+    target: {
+        linux_bionic: {
+            enabled: true,
+        }
+    }
 }
 
 cc_library {
@@ -31,6 +36,12 @@ cc_library {
 cc_library_headers {
     name: "libincfs_headers",
     export_include_dirs: ["include/", "kernel-headers",],
+    host_supported: true,
+    target: {
+        linux_bionic: {
+            enabled: true,
+        }
+    }
 }
 
 cc_test {
