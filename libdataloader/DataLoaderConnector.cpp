@@ -34,7 +34,7 @@ using namespace android::dataloader;
 using namespace std::literals;
 using android::base::unique_fd;
 
-using Inode = android::incfs::Inode;
+using FileId = android::incfs::FileId;
 using RawMetadata = android::incfs::RawMetadata;
 
 struct JniIds {
@@ -56,6 +56,7 @@ struct JniIds {
     jfieldID callback;
 
     jfieldID controlCmd;
+    jfieldID controlPendingReads;
     jfieldID controlLog;
 
     jfieldID paramsType;
@@ -117,6 +118,8 @@ struct JniIds {
         auto incControl =
                 FindClassOrDie(env, "android/os/incremental/IncrementalFileSystemControlParcel");
         controlCmd = GetFieldIDOrDie(env, incControl, "cmd", "Landroid/os/ParcelFileDescriptor;");
+        controlPendingReads = GetFieldIDOrDie(env, incControl, "pendingReads",
+                                              "Landroid/os/ParcelFileDescriptor;");
         controlLog = GetFieldIDOrDie(env, incControl, "log", "Landroid/os/ParcelFileDescriptor;");
 
         auto params = FindClassOrDie(env, "android/content/pm/DataLoaderParamsParcel");
@@ -184,8 +187,8 @@ struct Globals {
     std::atomic_bool stopped;
     std::thread cmdLooperThread;
     std::thread logLooperThread;
-    std::vector<PendingReadInfo> pendingReads;
-    std::vector<PageReadInfo> pageReads;
+    std::vector<ReadInfo> pendingReads;
+    std::vector<ReadInfo> pageReads;
 };
 
 static Globals& globals() {
@@ -247,8 +250,8 @@ public:
         env->DeleteGlobalRef(mCallbackControl);
         env->DeleteGlobalRef(mListener);
 
-        close(mControl.cmdFd);
-        close(mControl.logFd);
+        close(mControl.cmd);
+        close(mControl.logs);
     } // to avoid delete-non-virtual-dtor
 
     bool onCreate(DataLoaderFactory* factory, const DataLoaderParamsPair& params,
@@ -292,7 +295,7 @@ public:
         return result;
     }
 
-    int onCmdLooperEvent(std::vector<PendingReadInfo>& pendingReads) {
+    int onCmdLooperEvent(std::vector<ReadInfo>& pendingReads) {
         CHECK(mDataLoader);
         while (true) {
             pendingReads.resize(kPendingReadsBufferSize);
@@ -305,7 +308,7 @@ public:
         }
         return 1;
     }
-    int onLogLooperEvent(std::vector<PageReadInfo>& pageReads) {
+    int onLogLooperEvent(std::vector<ReadInfo>& pageReads) {
         CHECK(mDataLoader);
         while (true) {
             pageReads.clear();
@@ -327,12 +330,14 @@ public:
                                    offsetBytes, lengthBytes, incomingFd);
     }
 
-    int writeBlocks(const incfs_new_data_block blocks[], int blocksCount) const {
-        return android::incfs::writeBlocks(mControl, blocks, blocksCount);
+    int openWrite(FileId fid) const { return android::incfs::openWrite(mControl, fid); }
+
+    int writeBlocks(std::span<const IncFsDataBlock> blocks) const {
+        return android::incfs::writeBlocks(blocks);
     }
 
-    int getRawMetadata(Inode ino, char buffer[], size_t* bufferSize) const {
-        return IncFs_GetMetadata(mControl, ino, buffer, bufferSize);
+    int getRawMetadata(FileId fid, char buffer[], size_t* bufferSize) const {
+        return IncFs_GetMetadataById(mControl, fid, buffer, bufferSize);
     }
 
     bool reportStatus(DataLoaderStatus status) {
@@ -408,11 +413,13 @@ static IncFsControl createIncFsControlFromManaged(JNIEnv* env, jobject managedCo
     const auto& jni = jniIds(env);
     auto managedIncControl = env->GetObjectField(managedControl, jni.incremental);
     if (!managedIncControl) {
-        return {-1, -1};
+        return {-1, -1, -1};
     }
     auto cmd = createFdFromManaged(env, env->GetObjectField(managedIncControl, jni.controlCmd));
+    auto pr = createFdFromManaged(env,
+                                  env->GetObjectField(managedIncControl, jni.controlPendingReads));
     auto log = createFdFromManaged(env, env->GetObjectField(managedIncControl, jni.controlLog));
-    return {cmd, log};
+    return {cmd, pr, log};
 }
 
 DataLoaderParamsPair::DataLoaderParamsPair(android::dataloader::DataLoaderParams&& dataLoaderParams)
@@ -526,18 +533,23 @@ void DataLoader_FilesystemConnector_writeData(DataLoaderFilesystemConnectorPtr i
     return connector->writeData(name, offsetBytes, lengthBytes, incomingFd);
 }
 
-int DataLoader_FilesystemConnector_writeBlocks(DataLoaderFilesystemConnectorPtr ifs,
-                                               const struct incfs_new_data_block blocks[],
-                                               int blocksCount) {
+int DataLoader_FilesystemConnector_openWrite(DataLoaderFilesystemConnectorPtr ifs,
+                                             IncFsFileId fid) {
     auto connector = static_cast<DataLoaderConnector*>(ifs);
-    return connector->writeBlocks(blocks, blocksCount);
+    return connector->openWrite(fid);
+}
+
+int DataLoader_FilesystemConnector_writeBlocks(DataLoaderFilesystemConnectorPtr ifs,
+                                               const IncFsDataBlock blocks[], int blocksCount) {
+    auto connector = static_cast<DataLoaderConnector*>(ifs);
+    return connector->writeBlocks({blocks, blocksCount});
 }
 
 int DataLoader_FilesystemConnector_getRawMetadata(DataLoaderFilesystemConnectorPtr ifs,
-                                                  IncFsInode ino, char buffer[],
+                                                  IncFsFileId fid, char buffer[],
                                                   size_t* bufferSize) {
     auto connector = static_cast<DataLoaderConnector*>(ifs);
-    return connector->getRawMetadata(ino, buffer, bufferSize);
+    return connector->getRawMetadata(fid, buffer, bufferSize);
 }
 
 int DataLoader_StatusListener_reportStatus(DataLoaderStatusListenerPtr listener,
@@ -559,10 +571,10 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
                                                                                reportDestroyed);
 
     auto nativeControl = createIncFsControlFromManaged(env, control);
-    ALOGE("DataLoader::create1 cmd: %d/%s", nativeControl.cmdFd,
-          pathFromFd(nativeControl.cmdFd).c_str());
-    ALOGE("DataLoader::create1 log: %d/%s", nativeControl.logFd,
-          pathFromFd(nativeControl.logFd).c_str());
+    ALOGE("DataLoader::create1 cmd: %d/%s", nativeControl.cmd,
+          pathFromFd(nativeControl.cmd).c_str());
+    ALOGE("DataLoader::create1 log: %d/%s", nativeControl.logs,
+          pathFromFd(nativeControl.logs).c_str());
 
     auto nativeParams = DataLoaderParamsPair::createFromManaged(env, params);
     ALOGE("DataLoader::create2: %d/%s/%s/%s/%d", nativeParams.dataLoaderParams().type(),
@@ -635,25 +647,24 @@ bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
         control = dataLoaderConnector->control();
 
         // Create loopers while we are under lock.
-        if (control.cmdFd >= 0 && !globals().cmdLooperThread.joinable()) {
+        if (control.cmd >= 0 && !globals().cmdLooperThread.joinable()) {
             cmdLooper();
             globals().cmdLooperThread = std::thread(&cmdLooperThread);
         }
-        if (control.logFd >= 0 && !globals().logLooperThread.joinable()) {
+        if (control.logs >= 0 && !globals().logLooperThread.joinable()) {
             logLooper();
             globals().logLooperThread = std::thread(&logLooperThread);
         }
     }
 
-    if (control.cmdFd >= 0) {
-        cmdLooper().addFd(control.cmdFd, android::Looper::POLL_CALLBACK,
-                          android::Looper::EVENT_INPUT, &onCmdLooperEvent,
-                          dataLoaderConnector.get());
+    if (control.cmd >= 0) {
+        cmdLooper().addFd(control.cmd, android::Looper::POLL_CALLBACK, android::Looper::EVENT_INPUT,
+                          &onCmdLooperEvent, dataLoaderConnector.get());
         cmdLooper().wake();
     }
 
-    if (control.logFd >= 0) {
-        logLooper().addFd(control.logFd, android::Looper::POLL_CALLBACK,
+    if (control.logs >= 0) {
+        logLooper().addFd(control.logs, android::Looper::POLL_CALLBACK,
                           android::Looper::EVENT_INPUT, &onLogLooperEvent,
                           dataLoaderConnector.get());
         logLooper().wake();
@@ -690,12 +701,12 @@ bool DataLoaderService_OnStop(JNIEnv* env, jint storageId) {
         reportStoppedOnExit.reset(dlIt->second->listener());
     }
 
-    if (control.cmdFd >= 0) {
-        cmdLooper().removeFd(control.cmdFd);
+    if (control.cmd >= 0) {
+        cmdLooper().removeFd(control.cmd);
         cmdLooper().wake();
     }
-    if (control.logFd >= 0) {
-        logLooper().removeFd(control.logFd);
+    if (control.logs >= 0) {
+        logLooper().removeFd(control.logs);
         logLooper().wake();
     }
 

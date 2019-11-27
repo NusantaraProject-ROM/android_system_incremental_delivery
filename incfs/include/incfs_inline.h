@@ -15,10 +15,18 @@
  */
 #pragma once
 
+#include "incfs.h"
+
 #include <optional>
 #include <string>
 
 namespace android::incfs {
+
+constexpr char kIdAttrName[] = INCFS_XATTR_ID_NAME;
+constexpr char kSizeAttrName[] = INCFS_XATTR_SIZE_NAME;
+constexpr char kMetadataAttrName[] = INCFS_XATTR_METADATA_NAME;
+
+constexpr char kIndexDir[] = ".index";
 
 namespace details {
 
@@ -53,72 +61,136 @@ inline CStrWrapper c_str(std::string_view sv) {
 } // namespace details
 
 inline bool enabled() {
-    return IncFs_Enabled();
+    return IncFs_IsEnabled();
 }
-inline Version version() {
-    return IncFs_Version();
+
+inline Features features() {
+    return Features(IncFs_Features());
 }
 
 inline bool isIncFsPath(std::string_view path) {
     return IncFs_IsIncFsPath(details::c_str(path));
 }
 
-inline Control mount(std::string_view imagePath, std::string_view targetDir, int32_t flags,
-                     std::chrono::milliseconds timeout, int mode) {
-    return IncFs_Mount(details::c_str(imagePath), details::c_str(targetDir), flags, timeout.count(),
-                       mode);
+inline bool isValidFileId(FileId fileId) {
+    return IncFs_IsValidFileId(fileId);
 }
-inline ErrorCode unmount(std::string_view dir) {
-    return IncFs_Unmount(details::c_str(dir));
+
+inline std::string toString(FileId fileId) {
+    std::string res(kIncFsFileIdStringLength, '\0');
+    auto err = IncFs_FileIdToString(fileId, res.data());
+    if (err) {
+        errno = err;
+        return {};
+    }
+    return res;
 }
+
+inline IncFsFileId toFileId(std::string_view str) {
+    if (str.size() != kIncFsFileIdStringLength) {
+        return kIncFsInvalidFileId;
+    }
+    return IncFs_FileIdFromString(str.data());
+}
+
+inline UniqueControl mount(std::string_view backingPath, std::string_view targetDir,
+                           MountOptions options) {
+    return IncFs_Mount(details::c_str(backingPath), details::c_str(targetDir), options);
+}
+
+inline UniqueControl open(std::string_view dir) {
+    return IncFs_Open(details::c_str(dir));
+}
+
+inline ErrorCode setOptions(Control control, MountOptions newOptions) {
+    return IncFs_SetOptions(control, newOptions);
+}
+
 inline ErrorCode bindMount(std::string_view sourceDir, std::string_view targetDir) {
     return IncFs_BindMount(details::c_str(sourceDir), details::c_str(targetDir));
+}
+
+inline ErrorCode unmount(std::string_view dir) {
+    return IncFs_Unmount(details::c_str(dir));
 }
 
 inline std::string root(Control control) {
     std::string result;
     result.resize(PATH_MAX);
     size_t size = result.size();
-    if (IncFs_Root(control, result.data(), &size) < 0) {
+    if (auto err = IncFs_Root(control, result.data(), &size); err < 0) {
+        errno = -err;
         return {};
     }
     result.resize(size);
     return result;
 }
 
-inline Control open(std::string_view dir) {
-    return IncFs_Open(details::c_str(dir));
+inline ErrorCode makeFile(Control control, std::string_view path, int mode, FileId fileId,
+                          NewFileParams params) {
+    return IncFs_MakeFile(control, details::c_str(path), mode, fileId, params);
 }
-inline Inode makeFile(Control control, std::string_view name, Inode parent, Size size,
-                      std::string_view metadata, int mode) {
-    return IncFs_MakeFile(control, details::c_str(name), parent, size, metadata.begin(),
-                          metadata.size(), mode);
+inline ErrorCode makeFile(Control control, std::string_view path, int mode, NewFileParams params) {
+    return IncFs_MakeFileNoId(control, details::c_str(path), mode, params);
 }
-inline Inode makeDir(Control control, std::string_view name, Inode parent,
-                     std::string_view metadata, int mode) {
-    return IncFs_MakeDir(control, details::c_str(name), parent, metadata.begin(), metadata.size(),
-                         mode);
+inline ErrorCode makeDir(Control control, std::string_view path, int mode) {
+    return IncFs_MakeDir(control, details::c_str(path), mode);
 }
 
-inline RawMetadata getMetadata(Control control, Inode inode) {
+inline RawMetadata getMetadata(Control control, FileId fileId) {
     RawMetadata metadata(INCFS_MAX_FILE_ATTR_SIZE);
     size_t size = metadata.size();
-    if (IncFs_GetMetadata(control, inode, metadata.data(), &size) < 0) {
+    if (IncFs_GetMetadataById(control, fileId, metadata.data(), &size) < 0) {
         return {};
     }
     metadata.resize(size);
     return metadata;
 }
 
-inline ErrorCode link(Control control, Inode item, Inode targetParent, std::string_view name) {
-    return IncFs_Link(control, item, targetParent, details::c_str(name));
+inline RawMetadata getMetadata(Control control, std::string_view path) {
+    RawMetadata metadata(INCFS_MAX_FILE_ATTR_SIZE);
+    size_t size = metadata.size();
+    if (IncFs_GetMetadataByPath(control, details::c_str(path), metadata.data(), &size) < 0) {
+        return {};
+    }
+    metadata.resize(size);
+    return metadata;
 }
-inline ErrorCode unlink(Control control, Inode parent, std::string_view name) {
-    return IncFs_Unlink(control, parent, details::c_str(name));
+
+inline RawSignature getSignature(Control control, FileId fileId) {
+    RawSignature signature(INCFS_MAX_SIGNATURE_SIZE);
+    size_t size = signature.size();
+    if (IncFs_GetSignatureById(control, fileId, signature.data(), &size) < 0) {
+        return {};
+    }
+    signature.resize(size);
+    return signature;
+}
+
+inline RawSignature getSignature(Control control, std::string_view path) {
+    RawSignature signature(INCFS_MAX_SIGNATURE_SIZE);
+    size_t size = signature.size();
+    if (IncFs_GetSignatureByPath(control, details::c_str(path), signature.data(), &size) < 0) {
+        return {};
+    }
+    signature.resize(size);
+    return signature;
+}
+
+inline FileId getFileId(Control control, std::string_view path) {
+    return IncFs_GetId(control, details::c_str(path));
+}
+
+inline ErrorCode link(Control control, std::string_view sourcePath, std::string_view targetPath) {
+    return IncFs_Link(control, details::c_str(sourcePath), details::c_str(targetPath));
+}
+
+inline ErrorCode unlink(Control control, std::string_view path) {
+    return IncFs_Unlink(control, details::c_str(path));
 }
 
 inline WaitResult waitForPendingReads(Control control, std::chrono::milliseconds timeout,
-                                      std::vector<PendingReadInfo>* pendingReadsBuffer) {
+                                      std::vector<ReadInfo>* pendingReadsBuffer) {
     static constexpr auto kDefaultBufferSize = INCFS_DEFAULT_PENDING_READ_BUFFER_SIZE;
     if (pendingReadsBuffer->empty()) {
         pendingReadsBuffer->resize(kDefaultBufferSize);
@@ -137,9 +209,9 @@ inline WaitResult waitForPendingReads(Control control, std::chrono::milliseconds
 }
 
 inline WaitResult waitForPageReads(Control control, std::chrono::milliseconds timeout,
-                                   std::vector<PageReadInfo>* pageReadsBuffer) {
+                                   std::vector<ReadInfo>* pageReadsBuffer) {
     static constexpr auto kDefaultBufferSize =
-            INCFS_DEFAULT_PAGE_READ_BUFFER_PAGES * PAGE_SIZE / sizeof(PageReadInfo);
+            INCFS_DEFAULT_PAGE_READ_BUFFER_PAGES * PAGE_SIZE / sizeof(ReadInfo);
     if (pageReadsBuffer->empty()) {
         pageReadsBuffer->resize(kDefaultBufferSize);
     }
@@ -156,9 +228,19 @@ inline WaitResult waitForPageReads(Control control, std::chrono::milliseconds ti
     return WaitResult(err);
 }
 
-inline ErrorCode writeBlocks(Control control, const incfs_new_data_block blocks[],
-                             int blocksCount) {
-    return IncFs_WriteBlocks(control, blocks, blocksCount);
+inline android::base::unique_fd openWrite(Control control, FileId fileId) {
+    return android::base::unique_fd(IncFs_OpenWriteById(control, fileId));
+}
+inline android::base::unique_fd openWrite(Control control, std::string_view path) {
+    return android::base::unique_fd(IncFs_OpenWriteByPath(control, details::c_str(path)));
+}
+
+inline ErrorCode writeBlocks(std::span<const DataBlock> blocks) {
+    return IncFs_WriteBlocks(blocks.data(), blocks.size());
 }
 
 } // namespace android::incfs
+
+inline bool operator==(const IncFsFileId& l, const IncFsFileId& r) {
+    return memcmp(&l, &r, sizeof(l)) == 0;
+}

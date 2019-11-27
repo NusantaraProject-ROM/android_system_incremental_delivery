@@ -17,6 +17,8 @@
 
 #include "dataloader_ndk.h"
 
+#include "incfs.h"
+
 #include <functional>
 #include <memory>
 #include <span>
@@ -32,9 +34,9 @@ struct DataLoaderParams;
 struct FilesystemConnector;
 struct StatusListener;
 
-using Inode = IncFsInode;
-using PendingReadInfo = IncFsPendingReadInfo;
-using PageReadInfo = IncFsPageReadInfo;
+using FileId = IncFsFileId;
+using ReadInfo = IncFsReadInfo;
+using DataBlock = IncFsDataBlock;
 
 using FilesystemConnectorPtr = FilesystemConnector*;
 using StatusListenerPtr = StatusListener*;
@@ -42,9 +44,10 @@ using ServiceConnectorPtr = DataLoaderServiceConnectorPtr;
 using ServiceParamsPtr = DataLoaderServiceParamsPtr;
 
 using DataLoaderPtr = std::unique_ptr<DataLoader>;
-using PendingReads = std::span<const PendingReadInfo>;
-using PageReads = std::span<const PageReadInfo>;
+using PendingReads = std::span<const ReadInfo>;
+using PageReads = std::span<const ReadInfo>;
 using RawMetadata = std::vector<char>;
+using DataBlocks = std::span<const DataBlock>;
 
 constexpr int kBlockSize = INCFS_DATA_FILE_BLOCK_SIZE;
 
@@ -93,8 +96,9 @@ private:
 };
 
 struct FilesystemConnector : public DataLoaderFilesystemConnector {
-    int writeBlocks(const incfs_new_data_block blocks[], int blocksCount);
-    RawMetadata getRawMetadata(Inode ino);
+    int openWrite(FileId fid);
+    int writeBlocks(DataBlocks blocks);
+    RawMetadata getRawMetadata(FileId fid);
 };
 
 struct StatusListener : public DataLoaderStatusListener {

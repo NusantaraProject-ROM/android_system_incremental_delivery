@@ -34,6 +34,7 @@ public:
 
     const std::vector<std::string>& roots() const { return mRoots; }
     std::string_view rootFor(std::string_view path) const;
+    std::pair<std::string_view, std::string> rootAndSubpathFor(std::string_view path) const;
 
     void addRoot(std::string_view root);
     void removeRoot(std::string_view root);
@@ -48,11 +49,13 @@ public:
     }
 
 private:
-    using BindMap = std::map<std::string, int, std::less<>>;
+    // std::less<> enables heterogeneous lookups, e.g. by a string_view
+    using BindMap = std::map<std::string, std::pair<std::string, int>, std::less<>>;
 
     void clear();
     void load();
     std::pair<int, BindMap::const_iterator> rootIndex(std::string_view path) const;
+    std::pair<int, BindMap::const_iterator> rootIndexImpl(std::string_view path) const;
 
     std::string mFilesystem;
     std::vector<std::string> mRoots;

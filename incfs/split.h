@@ -49,9 +49,15 @@ void Split(std::string_view s, Separator delimiters, Callback&& onSplitCb) {
 // The empty string is not a valid delimiter list.
 //
 template <class Separator>
+void Split(std::string_view s, Separator delimiters, std::vector<std::string_view>* out) {
+    out->clear();
+    Split(s, delimiters, [out](std::string_view split) { out->emplace_back(split); });
+}
+
+template <class Separator>
 std::vector<std::string_view> Split(std::string_view s, Separator delimiters) {
     std::vector<std::string_view> result;
-    Split(s, delimiters, [&result](std::string_view split) { result.emplace_back(split); });
+    Split(s, delimiters, &result);
     return result;
 }
 
