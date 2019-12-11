@@ -20,7 +20,7 @@ apex {
     compile_multilib: "both",
     native_shared_libs: [
         "libincfs",
-        "libincremental_dataloader",
+        "libdataloader",
     ],
 
     key: "com.android.incremental.key",

@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "incremental_dataloader_ndk.h"
+#include "dataloader_ndk.h"
 
 #include <functional>
 #include <memory>
@@ -23,9 +23,9 @@
 #include <string>
 #include <vector>
 
-namespace android::incremental {
+namespace android::dataloader {
 
-using DataLoaderStatus = IncrementalDataLoaderStatus;
+using DataLoaderStatus = ::DataLoaderStatus;
 
 struct DataLoader;
 struct DataLoaderParams;
@@ -38,8 +38,8 @@ using PageReadInfo = IncFsPageReadInfo;
 
 using FilesystemConnectorPtr = FilesystemConnector*;
 using StatusListenerPtr = StatusListener*;
-using ServiceConnectorPtr = IncrementalServiceConnectorPtr;
-using ServiceParamsPtr = IncrementalServiceParamsPtr;
+using ServiceConnectorPtr = DataLoaderServiceConnectorPtr;
+using ServiceParamsPtr = DataLoaderServiceParamsPtr;
 
 using DataLoaderPtr = std::unique_ptr<DataLoader>;
 using PendingReads = std::span<const PendingReadInfo>;
@@ -49,7 +49,7 @@ using RawMetadata = std::vector<char>;
 constexpr int kBlockSize = INCFS_DATA_FILE_BLOCK_SIZE;
 
 struct DataLoader {
-    using Factory = std::function<DataLoaderPtr(IncrementalServiceVmPtr)>;
+    using Factory = std::function<DataLoaderPtr(DataLoaderServiceVmPtr)>;
     static void initialize(Factory&& factory);
 
     virtual ~DataLoader() {}
@@ -86,15 +86,15 @@ private:
     std::vector<NamedFd> const mDynamicArgs;
 };
 
-struct FilesystemConnector : public IncrementalFilesystemConnector {
+struct FilesystemConnector : public DataLoaderFilesystemConnector {
     int writeBlocks(const incfs_new_data_block blocks[], int blocksCount);
     RawMetadata getRawMetadata(Inode ino);
 };
 
-struct StatusListener : public IncrementalStatusListener {
+struct StatusListener : public DataLoaderStatusListener {
     bool reportStatus(DataLoaderStatus status);
 };
 
-} // namespace android::incremental
+} // namespace android::dataloader
 
-#include "incremental_dataloader_inline.h"
+#include "dataloader_inline.h"

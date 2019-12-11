@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#define LOG_TAG "incfs-manageddataloader"
+#define LOG_TAG "dataloader-manageddataloader"
 
 #include "ManagedDataLoader.h"
 
@@ -21,7 +21,7 @@
 
 #include "JNIHelpers.h"
 
-namespace android::incremental {
+namespace android::dataloader {
 
 namespace {
 
@@ -80,9 +80,9 @@ struct JniIds {
 
         dataLoaderParams = (jclass)env->NewGlobalRef(
                 FindClassOrDie(env, "android/os/incremental/IncrementalDataLoaderParams"));
-        dataLoaderParamsCtor =
-                GetMethodIDOrDie(env, dataLoaderParams, "<init>",
-                                 "(Landroid/os/incremental/IncrementalDataLoaderParamsParcel;)V");
+        dataLoaderParamsCtor = GetMethodIDOrDie(env, dataLoaderParams, "<init>",
+                                                "(Landroid/os/incremental/"
+                                                "IncrementalDataLoaderParamsParcel;)V");
 
         auto dataLoaderService =
                 FindClassOrDie(env, "android/service/incremental/IncrementalDataLoaderService");
@@ -110,10 +110,11 @@ struct JniIds {
                 GetMethodIDOrDie(env, dataLoader, "onPageReads", "(Ljava/util/Collection;)V");
         dataLoaderOnFileCreated = GetMethodIDOrDie(env, dataLoader, "onFileCreated", "(J[B)V");
 
-        pendingReadInfo = (jclass)env->NewGlobalRef(
-                FindClassOrDie(env,
-                               "android/service/incremental/"
-                               "IncrementalDataLoaderService$FileSystemConnector$PendingReadInfo"));
+        pendingReadInfo =
+                (jclass)env->NewGlobalRef(FindClassOrDie(env,
+                                                         "android/service/incremental/"
+                                                         "IncrementalDataLoaderService$"
+                                                         "FileSystemConnector$PendingReadInfo"));
         pendingReadInfoConstruct = GetMethodIDOrDie(env, pendingReadInfo, "<init>", "(JI)V");
 
         readInfo = (jclass)env->NewGlobalRef(
@@ -139,11 +140,11 @@ ManagedDataLoader::ManagedDataLoader(JavaVM* jvm) : mJvm(jvm) {
     CHECK(mJvm);
 }
 
-bool ManagedDataLoader::onCreate(const android::incremental::DataLoaderParams&,
-                                 android::incremental::FilesystemConnectorPtr ifs,
-                                 android::incremental::StatusListenerPtr listener,
-                                 android::incremental::ServiceConnectorPtr service,
-                                 android::incremental::ServiceParamsPtr params) {
+bool ManagedDataLoader::onCreate(const android::dataloader::DataLoaderParams&,
+                                 android::dataloader::FilesystemConnectorPtr ifs,
+                                 android::dataloader::StatusListenerPtr listener,
+                                 android::dataloader::ServiceConnectorPtr service,
+                                 android::dataloader::ServiceParamsPtr params) {
     CHECK(!mDataLoader);
 
     JNIEnv* env = GetJNIEnvironment(mJvm);
@@ -152,7 +153,8 @@ bool ManagedDataLoader::onCreate(const android::incremental::DataLoaderParams&,
     jobject ifsc = env->NewObject(jni.incrementalFileSystemConnector,
                                   jni.incrementalFileSystemConnectorConstruct, (jlong)ifs);
     if (!ifsc) {
-        LOG(ERROR) << "Failed to obtain Java IncrementalDataLoaderService$FileSystemConnector.";
+        LOG(ERROR) << "Failed to obtain Java "
+                      "IncrementalDataLoaderService$FileSystemConnector.";
         return false;
     }
 
@@ -258,4 +260,4 @@ void ManagedDataLoader::onFileCreated(Inode inode, const RawMetadata& metadata) 
     env->CallVoidMethod(mDataLoader, jni.dataLoaderOnFileCreated, (jlong)inode, jMetadataBytes);
 }
 
-} // namespace android::incremental
+} // namespace android::dataloader

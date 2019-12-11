@@ -15,35 +15,35 @@
  */
 #pragma once
 
-#include "incremental_dataloader.h"
+#include "dataloader.h"
 
-namespace android::incremental {
-
+namespace android::dataloader {
 namespace details {
-struct DataLoaderImpl : public IncrementalDataLoader {
+
+struct DataLoaderImpl : public ::DataLoader {
     DataLoaderImpl(DataLoaderPtr&& dataLoader) : mDataLoader(std::move(dataLoader)) {
-        onStart = [](IncrementalDataLoader* self) -> bool {
+        onStart = [](DataLoader* self) -> bool {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onStart();
         };
-        onStop = [](IncrementalDataLoader* self) {
+        onStop = [](DataLoader* self) {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onStop();
         };
-        onDestroy = [](IncrementalDataLoader* self) {
+        onDestroy = [](DataLoader* self) {
             auto me = static_cast<DataLoaderImpl*>(self);
             me->mDataLoader->onDestroy();
             delete me;
         };
-        onPendingReads = [](IncrementalDataLoader* self, const IncFsPendingReadInfo pendingReads[],
+        onPendingReads = [](DataLoader* self, const IncFsPendingReadInfo pendingReads[],
                             int pendingReadsCount) {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPendingReads(
                     PendingReads(pendingReads, pendingReadsCount));
         };
-        onPageReads = [](IncrementalDataLoader* self, const IncFsPageReadInfo pageReads[],
+        onPageReads = [](DataLoader* self, const IncFsPageReadInfo pageReads[],
                          int pageReadsCount) {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPageReads(
                     PageReads(pageReads, pageReadsCount));
         };
-        onFileCreated = [](IncrementalDataLoader* self, Inode inode, const char* metadataBytes,
+        onFileCreated = [](DataLoader* self, Inode inode, const char* metadataBytes,
                            int metadataLength) {
             RawMetadata metadata(metadataBytes, metadataBytes + metadataLength);
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onFileCreated(inode, metadata);
@@ -54,7 +54,7 @@ private:
     DataLoaderPtr mDataLoader;
 };
 
-inline DataLoaderParams createParams(const IncrementalDataLoaderParams* params) {
+inline DataLoaderParams createParams(const ::DataLoaderParams* params) {
     std::string staticArgs(params->staticArgs);
     std::string packageName(params->packageName);
     std::vector<DataLoaderParams::NamedFd> dynamicArgs(params->dynamicArgsSize);
@@ -65,15 +65,15 @@ inline DataLoaderParams createParams(const IncrementalDataLoaderParams* params) 
     return DataLoaderParams(std::move(staticArgs), std::move(packageName), std::move(dynamicArgs));
 }
 
-struct IncrementalDataLoaderFactoryImpl : public IncrementalDataLoaderFactory {
-    IncrementalDataLoaderFactoryImpl(DataLoader::Factory&& factory) : mFactory(factory) {
-        onCreate = [](IncrementalDataLoaderFactory* self, const IncrementalDataLoaderParams* params,
-                      IncrementalFilesystemConnectorPtr fsConnector,
-                      IncrementalStatusListenerPtr statusListener, IncrementalServiceVmPtr vm,
-                      IncrementalServiceConnectorPtr serviceConnector,
-                      IncrementalServiceParamsPtr serviceParams) {
-            auto me = static_cast<IncrementalDataLoaderFactoryImpl*>(self);
-            IncrementalDataLoader* result = nullptr;
+struct DataLoaderFactoryImpl : public ::DataLoaderFactory {
+    DataLoaderFactoryImpl(DataLoader::Factory&& factory) : mFactory(factory) {
+        onCreate = [](::DataLoaderFactory* self, const ::DataLoaderParams* params,
+                      ::DataLoaderFilesystemConnectorPtr fsConnector,
+                      ::DataLoaderStatusListenerPtr statusListener, ::DataLoaderServiceVmPtr vm,
+                      ::DataLoaderServiceConnectorPtr serviceConnector,
+                      ::DataLoaderServiceParamsPtr serviceParams) {
+            auto me = static_cast<DataLoaderFactoryImpl*>(self);
+            ::DataLoader* result = nullptr;
             auto dataLoader = me->mFactory(vm);
             if (!dataLoader ||
                 !dataLoader->onCreate(createParams(params),
@@ -94,8 +94,7 @@ private:
 } // namespace details
 
 inline void DataLoader::initialize(DataLoader::Factory&& factory) {
-    Incremental_DataLoader_Initialize(
-            new details::IncrementalDataLoaderFactoryImpl(std::move(factory)));
+    DataLoader_Initialize(new details::DataLoaderFactoryImpl(std::move(factory)));
 }
 
 inline DataLoaderParams::DataLoaderParams(std::string&& staticArgs, std::string&& packageName,
@@ -105,13 +104,13 @@ inline DataLoaderParams::DataLoaderParams(std::string&& staticArgs, std::string&
         mDynamicArgs(std::move(dynamicArgs)) {}
 
 inline int FilesystemConnector::writeBlocks(const incfs_new_data_block blocks[], int blocksCount) {
-    return Incremental_FilesystemConnector_writeBlocks(this, blocks, blocksCount);
+    return DataLoader_FilesystemConnector_writeBlocks(this, blocks, blocksCount);
 }
 
 inline RawMetadata FilesystemConnector::getRawMetadata(Inode ino) {
     RawMetadata metadata(INCFS_MAX_FILE_ATTR_SIZE);
     size_t size = metadata.size();
-    if (Incremental_FilesystemConnector_getRawMetadata(this, ino, metadata.data(), &size) < 0) {
+    if (DataLoader_FilesystemConnector_getRawMetadata(this, ino, metadata.data(), &size) < 0) {
         return {};
     }
     metadata.resize(size);
@@ -119,7 +118,7 @@ inline RawMetadata FilesystemConnector::getRawMetadata(Inode ino) {
 }
 
 inline bool StatusListener::reportStatus(DataLoaderStatus status) {
-    return Incremental_StatusListener_reportStatus(this, status);
+    return DataLoader_StatusListener_reportStatus(this, status);
 }
 
-} // namespace android::incremental
+} // namespace android::dataloader
