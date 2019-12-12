@@ -25,12 +25,12 @@
 
 #include "JNIHelpers.h"
 #include "ManagedDataLoader.h"
+#include "dataloader.h"
 #include "incfs.h"
-#include "incremental_dataloader.h"
 
 namespace {
 
-using namespace android::incremental;
+using namespace android::dataloader;
 using namespace std::literals;
 using android::base::unique_fd;
 
@@ -120,7 +120,8 @@ const JniIds& jniIds(JNIEnv* env) {
 
 bool reportStatusViaCallback(JNIEnv* env, jobject listener, jint storageId, jint status) {
     if (listener == nullptr) {
-        ALOGE("No listener object to talk to IncrementalService. DataLoaderId=%d, "
+        ALOGE("No listener object to talk to IncrementalService. "
+              "DataLoaderId=%d, "
               "status=%d",
               storageId, status);
         return false;
@@ -142,12 +143,12 @@ using DataLoaderConnectorsMap = std::unordered_map<int, DataLoaderConnectorPtr>;
 
 struct Globals {
     Globals() {
-        dataLoaderFactory = new details::IncrementalDataLoaderFactoryImpl(
+        dataLoaderFactory = new details::DataLoaderFactoryImpl(
                 [](auto jvm) { return std::make_unique<ManagedDataLoader>(jvm); });
     }
 
-    IncrementalDataLoaderFactory managedDataLoaderFactory;
-    IncrementalDataLoaderFactory* dataLoaderFactory;
+    DataLoaderFactory managedDataLoaderFactory;
+    DataLoaderFactory* dataLoaderFactory;
 
     std::mutex dataLoaderConnectorsLock;
     // id->DataLoader map
@@ -183,17 +184,19 @@ static android::Looper& logLooper() {
 struct DataLoaderParamsPair {
     static DataLoaderParamsPair createFromManaged(JNIEnv* env, jobject params);
 
-    const DataLoaderParams& dataLoaderParams() const { return mDataLoaderParams; }
-    const IncrementalDataLoaderParams& incrementalDataLoaderParams() const {
+    const android::dataloader::DataLoaderParams& dataLoaderParams() const {
+        return mDataLoaderParams;
+    }
+    const ::DataLoaderParams& incrementalDataLoaderParams() const {
         return mIncrementalDataLoaderParams;
     }
 
 private:
-    DataLoaderParamsPair(DataLoaderParams&& dataLoaderParams);
+    DataLoaderParamsPair(android::dataloader::DataLoaderParams&& dataLoaderParams);
 
-    DataLoaderParams mDataLoaderParams;
-    IncrementalDataLoaderParams mIncrementalDataLoaderParams;
-    std::vector<IncrementalNamedFd> mIncrementalNamedFds;
+    android::dataloader::DataLoaderParams mDataLoaderParams;
+    ::DataLoaderParams mIncrementalDataLoaderParams;
+    std::vector<DataLoaderNamedFd> mNamedFds;
 };
 
 static constexpr auto kPendingReadsBufferSize = 256;
@@ -221,7 +224,7 @@ public:
         close(mControl.logFd);
     } // to avoid delete-non-virtual-dtor
 
-    bool onCreate(IncrementalDataLoaderFactory* factory, const DataLoaderParamsPair& params,
+    bool onCreate(DataLoaderFactory* factory, const DataLoaderParamsPair& params,
                   jobject managedParams) {
         mDataLoader = factory->onCreate(factory, &params.incrementalDataLoaderParams(), this, this,
                                         mJvm, mService, managedParams);
@@ -319,7 +322,7 @@ private:
     jobject const mService;
     jobject const mCallback;
 
-    IncrementalDataLoader* mDataLoader = nullptr;
+    ::DataLoader* mDataLoader = nullptr;
     const jint mStorageId;
     const IncFsControl mControl;
 };
@@ -359,19 +362,19 @@ static IncFsControl createIncFsControlFromManaged(JNIEnv* env, jobject managedCo
     return {cmd, log};
 }
 
-DataLoaderParamsPair::DataLoaderParamsPair(DataLoaderParams&& dataLoaderParams)
+DataLoaderParamsPair::DataLoaderParamsPair(android::dataloader::DataLoaderParams&& dataLoaderParams)
       : mDataLoaderParams(std::move(dataLoaderParams)) {
     mIncrementalDataLoaderParams.staticArgs = mDataLoaderParams.staticArgs().c_str();
     mIncrementalDataLoaderParams.packageName = mDataLoaderParams.packageName().c_str();
 
-    mIncrementalNamedFds.resize(mDataLoaderParams.dynamicArgs().size());
-    for (size_t i = 0, size = mIncrementalNamedFds.size(); i < size; ++i) {
+    mNamedFds.resize(mDataLoaderParams.dynamicArgs().size());
+    for (size_t i = 0, size = mNamedFds.size(); i < size; ++i) {
         const auto& arg = mDataLoaderParams.dynamicArgs()[i];
-        mIncrementalNamedFds[i].name = arg.name.c_str();
-        mIncrementalNamedFds[i].fd = arg.fd;
+        mNamedFds[i].name = arg.name.c_str();
+        mNamedFds[i].fd = arg.fd;
     }
-    mIncrementalDataLoaderParams.dynamicArgsSize = mIncrementalNamedFds.size();
-    mIncrementalDataLoaderParams.dynamicArgs = mIncrementalNamedFds.data();
+    mIncrementalDataLoaderParams.dynamicArgsSize = mNamedFds.size();
+    mIncrementalDataLoaderParams.dynamicArgs = mNamedFds.data();
 }
 
 DataLoaderParamsPair DataLoaderParamsPair::createFromManaged(JNIEnv* env, jobject managedParams) {
@@ -389,7 +392,7 @@ DataLoaderParamsPair DataLoaderParamsPair::createFromManaged(JNIEnv* env, jobjec
     auto dynamicArgsArray = (jobjectArray)env->GetObjectField(managedParams, jni.paramsDynamicArgs);
 
     size_t size = env->GetArrayLength(dynamicArgsArray);
-    std::vector<DataLoaderParams::NamedFd> dynamicArgs(size);
+    std::vector<android::dataloader::DataLoaderParams::NamedFd> dynamicArgs(size);
     for (size_t i = 0; i < size; ++i) {
         auto dynamicArg = env->GetObjectArrayElement(dynamicArgsArray, i);
         auto pfd = env->GetObjectField(dynamicArg, jni.namedFdFd);
@@ -400,8 +403,9 @@ DataLoaderParamsPair DataLoaderParamsPair::createFromManaged(JNIEnv* env, jobjec
                                         nullptr));
     }
 
-    return DataLoaderParamsPair(DataLoaderParams(std::move(staticArgs), std::move(packageName),
-                                                 std::move(dynamicArgs)));
+    return DataLoaderParamsPair(android::dataloader::DataLoaderParams(std::move(staticArgs),
+                                                                      std::move(packageName),
+                                                                      std::move(dynamicArgs)));
 }
 
 static void cmdLooperThread() {
@@ -450,33 +454,33 @@ static std::string pathFromFd(int fd) {
 
 } // namespace
 
-void Incremental_DataLoader_Initialize(struct IncrementalDataLoaderFactory* factory) {
+void DataLoader_Initialize(struct ::DataLoaderFactory* factory) {
     CHECK(factory) << "DataLoader factory is invalid.";
     globals().dataLoaderFactory = factory;
 }
 
-int Incremental_FilesystemConnector_writeBlocks(IncrementalFilesystemConnectorPtr ifs,
-                                                const struct incfs_new_data_block blocks[],
-                                                int blocksCount) {
+int DataLoader_FilesystemConnector_writeBlocks(DataLoaderFilesystemConnectorPtr ifs,
+                                               const struct incfs_new_data_block blocks[],
+                                               int blocksCount) {
     auto connector = static_cast<DataLoaderConnector*>(ifs);
     return connector->writeBlocks(blocks, blocksCount);
 }
 
-int Incremental_FilesystemConnector_getRawMetadata(IncrementalFilesystemConnectorPtr ifs,
-                                                   IncFsInode ino, char buffer[],
-                                                   size_t* bufferSize) {
+int DataLoader_FilesystemConnector_getRawMetadata(DataLoaderFilesystemConnectorPtr ifs,
+                                                  IncFsInode ino, char buffer[],
+                                                  size_t* bufferSize) {
     auto connector = static_cast<DataLoaderConnector*>(ifs);
     return connector->getRawMetadata(ino, buffer, bufferSize);
 }
 
-int Incremental_StatusListener_reportStatus(IncrementalStatusListenerPtr listener,
-                                            IncrementalDataLoaderStatus status) {
+int DataLoader_StatusListener_reportStatus(DataLoaderStatusListenerPtr listener,
+                                           DataLoaderStatus status) {
     auto connector = static_cast<DataLoaderConnector*>(listener);
     return connector->reportStatus(status);
 }
 
-bool Incremental_DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId,
-                                            jobject control, jobject params, jobject listener) {
+bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jobject control,
+                                jobject params, jobject listener) {
     auto reportNotReady = [listener, storageId](JNIEnv* env) {
         const auto& jni = jniIds(env);
         reportStatusViaCallback(env, listener, storageId,
@@ -519,7 +523,7 @@ bool Incremental_DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint s
     return true;
 }
 
-bool Incremental_DataLoaderService_OnStart(jint storageId) {
+bool DataLoaderService_OnStart(jint storageId) {
     IncFsControl control;
     DataLoaderConnectorPtr dataLoaderConnector;
     {
@@ -565,7 +569,7 @@ bool Incremental_DataLoaderService_OnStart(jint storageId) {
     return true;
 }
 
-bool Incremental_DataLoaderService_OnStop(jint storageId) {
+bool DataLoaderService_OnStop(jint storageId) {
     IncFsControl control;
     {
         std::lock_guard lock{globals().dataLoaderConnectorsLock};
@@ -602,8 +606,8 @@ bool Incremental_DataLoaderService_OnStop(jint storageId) {
     return true;
 }
 
-bool Incremental_DataLoaderService_OnDestroy(jint storageId) {
-    Incremental_DataLoaderService_OnStop(storageId);
+bool DataLoaderService_OnDestroy(jint storageId) {
+    DataLoaderService_OnStop(storageId);
 
     std::lock_guard lock{globals().dataLoaderConnectorsLock};
     auto dlIt = globals().dataLoaderConnectors.find(storageId);
@@ -617,7 +621,7 @@ bool Incremental_DataLoaderService_OnDestroy(jint storageId) {
     return true;
 }
 
-bool Incremental_DataLoaderService_OnFileCreated(jint storageId, jlong inode, jbyteArray metadata) {
+bool DataLoaderService_OnFileCreated(jint storageId, jlong inode, jbyteArray metadata) {
     std::lock_guard lock{globals().dataLoaderConnectorsLock};
     auto dlIt = globals().dataLoaderConnectors.find(storageId);
     if (dlIt == globals().dataLoaderConnectors.end()) {

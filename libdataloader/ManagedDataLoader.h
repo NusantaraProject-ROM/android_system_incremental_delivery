@@ -15,9 +15,9 @@
  */
 #pragma once
 
-#include <incremental_dataloader.h>
+#include <dataloader.h>
 
-namespace android::incremental {
+namespace android::dataloader {
 
 // Default DataLoader redirects everything back to Java.
 struct ManagedDataLoader : public DataLoader {
@@ -25,11 +25,11 @@ struct ManagedDataLoader : public DataLoader {
 
 private:
     // Lifecycle.
-    bool onCreate(const android::incremental::DataLoaderParams&,
-                  android::incremental::FilesystemConnectorPtr ifs,
-                  android::incremental::StatusListenerPtr listener,
-                  android::incremental::ServiceConnectorPtr service,
-                  android::incremental::ServiceParamsPtr params) override;
+    bool onCreate(const android::dataloader::DataLoaderParams&,
+                  android::dataloader::FilesystemConnectorPtr ifs,
+                  android::dataloader::StatusListenerPtr listener,
+                  android::dataloader::ServiceConnectorPtr service,
+                  android::dataloader::ServiceParamsPtr params) override;
     bool onStart() override;
     void onStop() override;
     void onDestroy() override;
@@ -42,4 +42,4 @@ private:
     jobject mDataLoader = nullptr;
 };
 
-} // namespace android::incremental
+} // namespace android::dataloader

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 cc_defaults {
-    name: "libincremental_dataloader_defaults",
+    name: "libdataloader_defaults",
     cpp_std: "c++2a",
     cflags: ["-Werror", "-Wall", "-Wextra", "-Wno-unused-parameter"],
     defaults: ["linux_bionic_supported"],
@@ -31,16 +31,16 @@ cc_defaults {
 }
 
 cc_library {
-    name: "libincremental_dataloader",
-    defaults: ["libincremental_dataloader_defaults"],
+    name: "libdataloader",
+    defaults: ["libdataloader_defaults"],
     srcs: [
-        "incremental_dataloader_ndk.c",
+        "dataloader_ndk.c",
         "DataLoaderConnector.cpp",
         "ManagedDataLoader.cpp",
     ],
 }
 
 cc_library_headers {
-    name: "libincremental_dataloader_headers",
+    name: "libdataloader_headers",
     export_include_dirs: ["include/"],
 }
