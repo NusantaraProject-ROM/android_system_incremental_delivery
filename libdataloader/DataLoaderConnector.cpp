@@ -50,6 +50,8 @@ struct JniIds {
 
     jmethodID parcelFileDescriptorGetFileDescriptor;
 
+    jfieldID incremental;
+
     jfieldID controlCmd;
     jfieldID controlLog;
 
@@ -95,10 +97,15 @@ struct JniIds {
                 GetMethodIDOrDie(env, parcelFileDescriptor, "getFileDescriptor",
                                  "()Ljava/io/FileDescriptor;");
 
-        auto control =
+        auto control = FindClassOrDie(env, "android/content/pm/FileSystemControlParcel");
+        incremental =
+                GetFieldIDOrDie(env, control, "incremental",
+                                "Landroid/os/incremental/IncrementalFileSystemControlParcel;");
+
+        auto incControl =
                 FindClassOrDie(env, "android/os/incremental/IncrementalFileSystemControlParcel");
-        controlCmd = GetFieldIDOrDie(env, control, "cmd", "Landroid/os/ParcelFileDescriptor;");
-        controlLog = GetFieldIDOrDie(env, control, "log", "Landroid/os/ParcelFileDescriptor;");
+        controlCmd = GetFieldIDOrDie(env, incControl, "cmd", "Landroid/os/ParcelFileDescriptor;");
+        controlLog = GetFieldIDOrDie(env, incControl, "log", "Landroid/os/ParcelFileDescriptor;");
 
         auto params =
                 FindClassOrDie(env, "android/os/incremental/IncrementalDataLoaderParamsParcel");
@@ -357,8 +364,9 @@ static int createFdFromManaged(JNIEnv* env, jobject pfd) {
 
 static IncFsControl createIncFsControlFromManaged(JNIEnv* env, jobject managedControl) {
     const auto& jni = jniIds(env);
-    auto cmd = createFdFromManaged(env, env->GetObjectField(managedControl, jni.controlCmd));
-    auto log = createFdFromManaged(env, env->GetObjectField(managedControl, jni.controlLog));
+    auto managedIncControl = env->GetObjectField(managedControl, jni.incremental);
+    auto cmd = createFdFromManaged(env, env->GetObjectField(managedIncControl, jni.controlCmd));
+    auto log = createFdFromManaged(env, env->GetObjectField(managedIncControl, jni.controlLog));
     return {cmd, log};
 }
 
