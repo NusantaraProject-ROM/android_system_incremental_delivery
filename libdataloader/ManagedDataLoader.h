@@ -30,13 +30,14 @@ private:
                   android::dataloader::StatusListenerPtr listener,
                   android::dataloader::ServiceConnectorPtr service,
                   android::dataloader::ServiceParamsPtr params) override;
-    bool onStart() override;
-    void onStop() override;
+    bool onStart() override { return true; }
+    void onStop() override {}
     void onDestroy() override;
 
-    void onPendingReads(const PendingReads& pendingReads) override;
-    void onPageReads(const PageReads& pageReads) override;
-    void onFileCreated(Inode inode, const RawMetadata& metadata) override;
+    bool onPrepareImage(jobject addedFiles, jobject removedFiles) override;
+
+    void onPendingReads(const PendingReads& pendingReads) override {}
+    void onPageReads(const PageReads& pageReads) override {}
 
     JavaVM* const mJvm;
     jobject mDataLoader = nullptr;

@@ -26,106 +26,44 @@ namespace android::dataloader {
 namespace {
 
 struct JniIds {
-    jmethodID parcelFileDescriptorDup;
-    jmethodID parcelFileDescriptorGetFileDescriptor;
-
-    jclass incrementalFileSystemConnector;
-    jmethodID incrementalFileSystemConnectorConstruct;
-
-    jclass statusListener;
-    jmethodID statusListenerConstruct;
-
     jclass dataLoaderParams;
-    jmethodID dataLoaderParamsCtor;
+    jmethodID dataLoaderParamsConstruct;
+
+    jclass fileSystemConnector;
+    jmethodID fileSystemConnectorConstruct;
 
     jmethodID dataLoaderServiceOnCreateDataLoader;
 
     jmethodID dataLoaderOnCreate;
-    jmethodID dataLoaderOnStart;
-    jmethodID dataLoaderOnStop;
-    jmethodID dataLoaderOnDestroy;
-    jmethodID dataLoaderOnPendingReads;
-    jmethodID dataLoaderOnPageReads;
-    jmethodID dataLoaderOnFileCreated;
-
-    jclass pendingReadInfo;
-    jmethodID pendingReadInfoConstruct;
-
-    jclass readInfo;
-    jmethodID readInfoConstruct;
-
-    jclass arrays;
-    jmethodID arraysAsList;
+    jmethodID dataLoaderOnPrepareImage;
 
     JniIds(JNIEnv* env) {
-        auto parcelFileDescriptor = FindClassOrDie(env, "android/os/ParcelFileDescriptor");
-        parcelFileDescriptorDup = GetMethodIDOrDie(env, parcelFileDescriptor, "dup",
-                                                   "()Landroid/os/ParcelFileDescriptor;");
-        parcelFileDescriptorGetFileDescriptor =
-                GetMethodIDOrDie(env, parcelFileDescriptor, "getFileDescriptor",
-                                 "()Ljava/io/FileDescriptor;");
-
-        incrementalFileSystemConnector = (jclass)env->NewGlobalRef(
-                FindClassOrDie(env,
-                               "android/service/incremental/"
-                               "IncrementalDataLoaderService$FileSystemConnector"));
-        incrementalFileSystemConnectorConstruct =
-                GetMethodIDOrDie(env, incrementalFileSystemConnector, "<init>", "(J)V");
-
-        statusListener = (jclass)env->NewGlobalRef(
-                FindClassOrDie(env,
-                               "android/service/incremental/"
-                               "IncrementalDataLoaderService$StatusListener"));
-        statusListenerConstruct = GetMethodIDOrDie(env, statusListener, "<init>", "(J)V");
-
         dataLoaderParams = (jclass)env->NewGlobalRef(
-                FindClassOrDie(env, "android/os/incremental/IncrementalDataLoaderParams"));
-        dataLoaderParamsCtor = GetMethodIDOrDie(env, dataLoaderParams, "<init>",
-                                                "(Landroid/content/pm/"
-                                                "DataLoaderParamsParcel;)V");
+                FindClassOrDie(env, "android/content/pm/DataLoaderParams"));
+        dataLoaderParamsConstruct =
+                GetMethodIDOrDie(env, dataLoaderParams, "<init>",
+                                 "(Landroid/content/pm/DataLoaderParamsParcel;)V");
+
+        fileSystemConnector = (jclass)env->NewGlobalRef(
+                FindClassOrDie(env,
+                               "android/service/dataloader/DataLoaderService$FileSystemConnector"));
+        fileSystemConnectorConstruct = GetMethodIDOrDie(env, fileSystemConnector, "<init>", "(J)V");
 
         auto dataLoaderService =
-                FindClassOrDie(env, "android/service/incremental/IncrementalDataLoaderService");
+                FindClassOrDie(env, "android/service/dataloader/DataLoaderService");
         dataLoaderServiceOnCreateDataLoader =
                 GetMethodIDOrDie(env, dataLoaderService, "onCreateDataLoader",
-                                 "()Landroid/service/incremental/"
-                                 "IncrementalDataLoaderService$DataLoader;");
+                                 "()Landroid/service/dataloader/DataLoaderService$DataLoader;");
 
-        auto dataLoader = FindClassOrDie(env,
-                                         "android/service/incremental/"
-                                         "IncrementalDataLoaderService$DataLoader");
+        auto dataLoader =
+                FindClassOrDie(env, "android/service/dataloader/DataLoaderService$DataLoader");
         dataLoaderOnCreate =
                 GetMethodIDOrDie(env, dataLoader, "onCreate",
-                                 "(Landroid/os/incremental/IncrementalDataLoaderParams;"
-                                 "Landroid/service/incremental/"
-                                 "IncrementalDataLoaderService$FileSystemConnector;"
-                                 "Landroid/service/incremental/"
-                                 "IncrementalDataLoaderService$StatusListener;)Z");
-        dataLoaderOnStart = GetMethodIDOrDie(env, dataLoader, "onStart", "()Z");
-        dataLoaderOnStop = GetMethodIDOrDie(env, dataLoader, "onStop", "()V");
-        dataLoaderOnDestroy = GetMethodIDOrDie(env, dataLoader, "onDestroy", "()V");
-        dataLoaderOnPendingReads =
-                GetMethodIDOrDie(env, dataLoader, "onPendingReads", "(Ljava/util/Collection;)V");
-        dataLoaderOnPageReads =
-                GetMethodIDOrDie(env, dataLoader, "onPageReads", "(Ljava/util/Collection;)V");
-        dataLoaderOnFileCreated = GetMethodIDOrDie(env, dataLoader, "onFileCreated", "(J[B)V");
-
-        pendingReadInfo =
-                (jclass)env->NewGlobalRef(FindClassOrDie(env,
-                                                         "android/service/incremental/"
-                                                         "IncrementalDataLoaderService$"
-                                                         "FileSystemConnector$PendingReadInfo"));
-        pendingReadInfoConstruct = GetMethodIDOrDie(env, pendingReadInfo, "<init>", "(JI)V");
-
-        readInfo = (jclass)env->NewGlobalRef(
-                FindClassOrDie(env,
-                               "android/service/incremental/"
-                               "IncrementalDataLoaderService$FileSystemConnector$ReadInfo"));
-        readInfoConstruct = GetMethodIDOrDie(env, readInfo, "<init>", "(JJII)V");
-
-        arrays = (jclass)env->NewGlobalRef(FindClassOrDie(env, "java/util/Arrays"));
-        arraysAsList = GetStaticMethodIDOrDie(env, arrays, "asList",
-                                              "([Ljava/lang/Object;)Ljava/util/List;");
+                                 "(Landroid/content/pm/DataLoaderParams;Landroid/service/"
+                                 "dataloader/DataLoaderService$FileSystemConnector;)Z");
+        dataLoaderOnPrepareImage =
+                GetMethodIDOrDie(env, dataLoader, "onPrepareImage",
+                                 "(Ljava/util/Collection;Ljava/util/Collection;)Z");
     }
 };
 
@@ -150,20 +88,9 @@ bool ManagedDataLoader::onCreate(const android::dataloader::DataLoaderParams&,
     JNIEnv* env = GetJNIEnvironment(mJvm);
     const auto& jni = jniIds(env);
 
-    jobject ifsc = env->NewObject(jni.incrementalFileSystemConnector,
-                                  jni.incrementalFileSystemConnectorConstruct, (jlong)ifs);
-    if (!ifsc) {
-        LOG(ERROR) << "Failed to obtain Java "
-                      "IncrementalDataLoaderService$FileSystemConnector.";
-        return false;
-    }
-
-    jobject statusListener =
-            env->NewObject(jni.statusListener, jni.statusListenerConstruct, (jlong)listener);
-    if (!statusListener) {
-        LOG(ERROR) << "Failed to obtain Java StatusListener.";
-        return false;
-    }
+    jobject dlp = env->NewObject(jni.dataLoaderParams, jni.dataLoaderParamsConstruct, params);
+    jobject ifsc =
+            env->NewObject(jni.fileSystemConnector, jni.fileSystemConnectorConstruct, (jlong)ifs);
 
     auto dataLoader = env->CallObjectMethod(service, jni.dataLoaderServiceOnCreateDataLoader);
     if (!dataLoader) {
@@ -171,93 +98,28 @@ bool ManagedDataLoader::onCreate(const android::dataloader::DataLoaderParams&,
         return false;
     }
 
-    const auto publicParams =
-            env->NewObject(jni.dataLoaderParams, jni.dataLoaderParamsCtor, params);
-    if (!publicParams) {
-        LOG(ERROR) << "Failed to create Java DataLoaderParams.";
-        return false;
-    }
-
     mDataLoader = env->NewGlobalRef(dataLoader);
-    return env->CallBooleanMethod(mDataLoader, jni.dataLoaderOnCreate, publicParams, ifsc,
-                                  statusListener);
+    return env->CallBooleanMethod(mDataLoader, jni.dataLoaderOnCreate, dlp, ifsc);
 }
-bool ManagedDataLoader::onStart() {
-    CHECK(mDataLoader);
 
-    JNIEnv* env = GetJNIEnvironment(mJvm);
-    const auto& jni = jniIds(env);
-
-    return env->CallBooleanMethod(mDataLoader, jni.dataLoaderOnStart);
-}
-void ManagedDataLoader::onStop() {
-    CHECK(mDataLoader);
-
-    JNIEnv* env = GetJNIEnvironment(mJvm);
-    const auto& jni = jniIds(env);
-
-    return env->CallVoidMethod(mDataLoader, jni.dataLoaderOnStop);
-}
 void ManagedDataLoader::onDestroy() {
     CHECK(mDataLoader);
 
     JNIEnv* env = GetJNIEnvironment(mJvm);
-    const auto& jni = jniIds(env);
 
-    env->CallVoidMethod(mDataLoader, jni.dataLoaderOnDestroy);
     env->DeleteGlobalRef(mDataLoader);
     mDataLoader = nullptr;
 }
 
-// IFS callbacks.
-void ManagedDataLoader::onPendingReads(const PendingReads& pendingReads) {
+// FS callbacks.
+bool ManagedDataLoader::onPrepareImage(jobject addedFiles, jobject removedFiles) {
     CHECK(mDataLoader);
 
     auto env = GetOrAttachJNIEnvironment(mJvm);
     const auto& jni = jniIds(env);
 
-    auto jreads = env->NewObjectArray(pendingReads.size(), jni.pendingReadInfo, nullptr);
-    CHECK(jreads);
-    for (size_t i = 0, size = pendingReads.size(); i < size; ++i) {
-        const auto& read = pendingReads[i];
-        auto jread = env->NewObject(jni.pendingReadInfo, jni.pendingReadInfoConstruct,
-                                    read.file_ino, read.block_index);
-        CHECK(jread);
-        env->SetObjectArrayElement(jreads, i, jread);
-    }
-    auto jlist = env->CallStaticObjectMethod(jni.arrays, jni.arraysAsList, jreads);
-    env->CallVoidMethod(mDataLoader, jni.dataLoaderOnPendingReads, jlist);
-}
-
-void ManagedDataLoader::onPageReads(const PageReads& pageReads) {
-    CHECK(mDataLoader);
-
-    auto env = GetOrAttachJNIEnvironment(mJvm);
-    const auto& jni = jniIds(env);
-
-    auto jreads = env->NewObjectArray(pageReads.size(), jni.readInfo, nullptr);
-    CHECK(jreads);
-    for (size_t i = 0, size = pageReads.size(); i < size; ++i) {
-        const auto& read = pageReads[i];
-        auto jread =
-                env->NewObject(jni.readInfo, jni.readInfoConstruct, jlong(read.timestamp_us / 1000),
-                               jlong(read.file_ino), jint(read.block_index), 1);
-        CHECK(jread);
-        env->SetObjectArrayElement(jreads, i, jread);
-    }
-    auto jlist = env->CallStaticObjectMethod(jni.arrays, jni.arraysAsList, jreads);
-    env->CallVoidMethod(mDataLoader, jni.dataLoaderOnPageReads, jlist);
-}
-
-void ManagedDataLoader::onFileCreated(Inode inode, const RawMetadata& metadata) {
-    CHECK(mDataLoader);
-
-    auto env = GetOrAttachJNIEnvironment(mJvm);
-    const auto& jni = jniIds(env);
-
-    auto jMetadataBytes = env->NewByteArray(metadata.size());
-    env->SetByteArrayRegion(jMetadataBytes, 0, metadata.size(), (jbyte*)&metadata[0]);
-    env->CallVoidMethod(mDataLoader, jni.dataLoaderOnFileCreated, (jlong)inode, jMetadataBytes);
+    return env->CallBooleanMethod(mDataLoader, jni.dataLoaderOnPrepareImage, addedFiles,
+                                  removedFiles);
 }
 
 } // namespace android::dataloader

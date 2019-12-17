@@ -24,14 +24,14 @@ __BEGIN_DECLS
 
 #define DATALOADER_LIBRARY_NAME "libdataloader.so"
 
-// Keep in sync with IncrementalConstants.java
+// Keep in sync with IDataLoaderStatusListener.aidl
 typedef enum {
-    INCREMENTAL_DATA_LOADER_SLOW_CONNECTION = 4,
-    INCREMENTAL_DATA_LOADER_NO_CONNECTION = 5,
-    INCREMENTAL_DATA_LOADER_CONNECTION_OK = 6,
+    DATA_LOADER_SLOW_CONNECTION = 6,
+    DATA_LOADER_NO_CONNECTION = 7,
+    DATA_LOADER_CONNECTION_OK = 8,
 
-    INCREMENTAL_DATA_LOADER_FIRST_STATUS = INCREMENTAL_DATA_LOADER_SLOW_CONNECTION,
-    INCREMENTAL_DATA_LOADER_LAST_STATUS = INCREMENTAL_DATA_LOADER_CONNECTION_OK,
+    DATA_LOADER_FIRST_STATUS = DATA_LOADER_SLOW_CONNECTION,
+    DATA_LOADER_LAST_STATUS = DATA_LOADER_CONNECTION_OK,
 } DataLoaderStatus;
 
 typedef struct {
@@ -40,8 +40,10 @@ typedef struct {
 } DataLoaderNamedFd;
 
 struct DataLoaderParams {
-    const char* staticArgs;
+    int type;
     const char* packageName;
+    const char* className;
+    const char* arguments;
 
     const DataLoaderNamedFd* dynamicArgs;
     int dynamicArgsSize;
@@ -69,8 +71,8 @@ struct DataLoader {
     bool (*onStart)(struct DataLoader* self);
     void (*onStop)(struct DataLoader* self);
     void (*onDestroy)(struct DataLoader* self);
-    void (*onFileCreated)(struct DataLoader* self, IncFsInode inode, const char* metadataBytes,
-                          int metadataLength);
+
+    bool (*onPrepareImage)(struct DataLoader* self, jobject addedFiles, jobject removedFiles);
 
     void (*onPendingReads)(struct DataLoader* self, const IncFsPendingReadInfo pendingReads[],
                            int pendingReadsCount);
@@ -85,6 +87,12 @@ struct DataLoaderFactory {
                                    DataLoaderServiceParamsPtr);
 };
 void DataLoader_Initialize(struct DataLoaderFactory*);
+
+bool DataLoaderService_OnPrepareImage(jint storageId, jobject addedFiles, jobject removedFiles);
+
+void DataLoader_FilesystemConnector_writeData(DataLoaderFilesystemConnectorPtr, jstring name,
+                                              jlong offsetBytes, jlong lengthBytes,
+                                              jobject incomingFd);
 
 int DataLoader_FilesystemConnector_writeBlocks(DataLoaderFilesystemConnectorPtr,
                                                const struct incfs_new_data_block blocks[],
@@ -102,7 +110,8 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
 bool DataLoaderService_OnStart(jint storageId);
 bool DataLoaderService_OnStop(jint storageId);
 bool DataLoaderService_OnDestroy(jint storageId);
-bool DataLoaderService_OnFileCreated(jint storageId, jlong inode, jbyteArray metadata);
+
+bool DataLoaderService_OnPrepareImage(jint storageId, jobject addedFiles, jobject removedFiles);
 
 __END_DECLS
 
