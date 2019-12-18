@@ -107,14 +107,13 @@ struct JniIds {
         controlCmd = GetFieldIDOrDie(env, incControl, "cmd", "Landroid/os/ParcelFileDescriptor;");
         controlLog = GetFieldIDOrDie(env, incControl, "log", "Landroid/os/ParcelFileDescriptor;");
 
-        auto params =
-                FindClassOrDie(env, "android/os/incremental/IncrementalDataLoaderParamsParcel");
+        auto params = FindClassOrDie(env, "android/content/pm/DataLoaderParamsParcel");
         paramsStaticArgs = GetFieldIDOrDie(env, params, "staticArgs", "Ljava/lang/String;");
         paramsPackageName = GetFieldIDOrDie(env, params, "packageName", "Ljava/lang/String;");
         paramsDynamicArgs = GetFieldIDOrDie(env, params, "dynamicArgs",
-                                            "[Landroid/os/incremental/NamedParcelFileDescriptor;");
+                                            "[Landroid/content/pm/NamedParcelFileDescriptor;");
 
-        auto namedFd = FindClassOrDie(env, "android/os/incremental/NamedParcelFileDescriptor");
+        auto namedFd = FindClassOrDie(env, "android/content/pm/NamedParcelFileDescriptor");
         namedFdName = GetFieldIDOrDie(env, namedFd, "name", "Ljava/lang/String;");
         namedFdFd = GetFieldIDOrDie(env, namedFd, "fd", "Landroid/os/ParcelFileDescriptor;");
     }

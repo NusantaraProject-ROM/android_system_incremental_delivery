@@ -81,8 +81,8 @@ struct JniIds {
         dataLoaderParams = (jclass)env->NewGlobalRef(
                 FindClassOrDie(env, "android/os/incremental/IncrementalDataLoaderParams"));
         dataLoaderParamsCtor = GetMethodIDOrDie(env, dataLoaderParams, "<init>",
-                                                "(Landroid/os/incremental/"
-                                                "IncrementalDataLoaderParamsParcel;)V");
+                                                "(Landroid/content/pm/"
+                                                "DataLoaderParamsParcel;)V");
 
         auto dataLoaderService =
                 FindClassOrDie(env, "android/service/incremental/IncrementalDataLoaderService");
