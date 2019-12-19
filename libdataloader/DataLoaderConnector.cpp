@@ -50,6 +50,8 @@ struct JniIds {
 
     jmethodID parcelFileDescriptorGetFileDescriptor;
 
+    jfieldID incremental;
+
     jfieldID controlCmd;
     jfieldID controlLog;
 
@@ -95,19 +97,23 @@ struct JniIds {
                 GetMethodIDOrDie(env, parcelFileDescriptor, "getFileDescriptor",
                                  "()Ljava/io/FileDescriptor;");
 
-        auto control =
-                FindClassOrDie(env, "android/os/incremental/IncrementalFileSystemControlParcel");
-        controlCmd = GetFieldIDOrDie(env, control, "cmd", "Landroid/os/ParcelFileDescriptor;");
-        controlLog = GetFieldIDOrDie(env, control, "log", "Landroid/os/ParcelFileDescriptor;");
+        auto control = FindClassOrDie(env, "android/content/pm/FileSystemControlParcel");
+        incremental =
+                GetFieldIDOrDie(env, control, "incremental",
+                                "Landroid/os/incremental/IncrementalFileSystemControlParcel;");
 
-        auto params =
-                FindClassOrDie(env, "android/os/incremental/IncrementalDataLoaderParamsParcel");
+        auto incControl =
+                FindClassOrDie(env, "android/os/incremental/IncrementalFileSystemControlParcel");
+        controlCmd = GetFieldIDOrDie(env, incControl, "cmd", "Landroid/os/ParcelFileDescriptor;");
+        controlLog = GetFieldIDOrDie(env, incControl, "log", "Landroid/os/ParcelFileDescriptor;");
+
+        auto params = FindClassOrDie(env, "android/content/pm/DataLoaderParamsParcel");
         paramsStaticArgs = GetFieldIDOrDie(env, params, "staticArgs", "Ljava/lang/String;");
         paramsPackageName = GetFieldIDOrDie(env, params, "packageName", "Ljava/lang/String;");
         paramsDynamicArgs = GetFieldIDOrDie(env, params, "dynamicArgs",
-                                            "[Landroid/os/incremental/NamedParcelFileDescriptor;");
+                                            "[Landroid/content/pm/NamedParcelFileDescriptor;");
 
-        auto namedFd = FindClassOrDie(env, "android/os/incremental/NamedParcelFileDescriptor");
+        auto namedFd = FindClassOrDie(env, "android/content/pm/NamedParcelFileDescriptor");
         namedFdName = GetFieldIDOrDie(env, namedFd, "name", "Ljava/lang/String;");
         namedFdFd = GetFieldIDOrDie(env, namedFd, "fd", "Landroid/os/ParcelFileDescriptor;");
     }
@@ -357,8 +363,9 @@ static int createFdFromManaged(JNIEnv* env, jobject pfd) {
 
 static IncFsControl createIncFsControlFromManaged(JNIEnv* env, jobject managedControl) {
     const auto& jni = jniIds(env);
-    auto cmd = createFdFromManaged(env, env->GetObjectField(managedControl, jni.controlCmd));
-    auto log = createFdFromManaged(env, env->GetObjectField(managedControl, jni.controlLog));
+    auto managedIncControl = env->GetObjectField(managedControl, jni.incremental);
+    auto cmd = createFdFromManaged(env, env->GetObjectField(managedIncControl, jni.controlCmd));
+    auto log = createFdFromManaged(env, env->GetObjectField(managedIncControl, jni.controlLog));
     return {cmd, log};
 }
 
