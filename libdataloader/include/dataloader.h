@@ -61,15 +61,19 @@ struct DataLoader {
     virtual void onStop() = 0;
     virtual void onDestroy() = 0;
 
+    // FS callbacks.
+    virtual bool onPrepareImage(jobject addedFiles, jobject removedFiles) { return false; }
+
     // IFS callbacks.
     virtual void onPendingReads(const PendingReads& pendingReads) = 0;
     virtual void onPageReads(const PageReads& pageReads) = 0;
-    virtual void onFileCreated(Inode inode, const RawMetadata& metadata) = 0;
 };
 
 struct DataLoaderParams {
-    const std::string& staticArgs() const { return mStaticArgs; }
+    int type() const { return mType; }
     const std::string& packageName() const { return mPackageName; }
+    const std::string& className() const { return mClassName; }
+    const std::string& arguments() const { return mArguments; }
 
     struct NamedFd {
         std::string name;
@@ -77,12 +81,14 @@ struct DataLoaderParams {
     };
     const std::vector<NamedFd>& dynamicArgs() const { return mDynamicArgs; }
 
-    DataLoaderParams(std::string&& staticArgs, std::string&& packageName,
-                     std::vector<NamedFd>&& dynamicArgs);
+    DataLoaderParams(int type, std::string&& packageName, std::string&& className,
+                     std::string&& arguments, std::vector<NamedFd>&& dynamicArgs);
 
 private:
-    std::string const mStaticArgs;
+    int const mType;
     std::string const mPackageName;
+    std::string const mClassName;
+    std::string const mArguments;
     std::vector<NamedFd> const mDynamicArgs;
 };
 

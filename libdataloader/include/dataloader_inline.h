@@ -33,6 +33,10 @@ struct DataLoaderImpl : public ::DataLoader {
             me->mDataLoader->onDestroy();
             delete me;
         };
+        onPrepareImage = [](DataLoader* self, jobject addedFiles, jobject removedFiles) {
+            return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPrepareImage(addedFiles,
+                                                                                   removedFiles);
+        };
         onPendingReads = [](DataLoader* self, const IncFsPendingReadInfo pendingReads[],
                             int pendingReadsCount) {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPendingReads(
@@ -43,11 +47,6 @@ struct DataLoaderImpl : public ::DataLoader {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPageReads(
                     PageReads(pageReads, pageReadsCount));
         };
-        onFileCreated = [](DataLoader* self, Inode inode, const char* metadataBytes,
-                           int metadataLength) {
-            RawMetadata metadata(metadataBytes, metadataBytes + metadataLength);
-            return static_cast<DataLoaderImpl*>(self)->mDataLoader->onFileCreated(inode, metadata);
-        };
     }
 
 private:
@@ -55,14 +54,17 @@ private:
 };
 
 inline DataLoaderParams createParams(const ::DataLoaderParams* params) {
-    std::string staticArgs(params->staticArgs);
+    const int type(params->type);
     std::string packageName(params->packageName);
+    std::string className(params->className);
+    std::string arguments(params->arguments);
     std::vector<DataLoaderParams::NamedFd> dynamicArgs(params->dynamicArgsSize);
     for (size_t i = 0; i < dynamicArgs.size(); ++i) {
         dynamicArgs[i].name = params->dynamicArgs[i].name;
         dynamicArgs[i].fd = params->dynamicArgs[i].fd;
     }
-    return DataLoaderParams(std::move(staticArgs), std::move(packageName), std::move(dynamicArgs));
+    return DataLoaderParams(type, std::move(packageName), std::move(className),
+                            std::move(arguments), std::move(dynamicArgs));
 }
 
 struct DataLoaderFactoryImpl : public ::DataLoaderFactory {
@@ -97,10 +99,13 @@ inline void DataLoader::initialize(DataLoader::Factory&& factory) {
     DataLoader_Initialize(new details::DataLoaderFactoryImpl(std::move(factory)));
 }
 
-inline DataLoaderParams::DataLoaderParams(std::string&& staticArgs, std::string&& packageName,
+inline DataLoaderParams::DataLoaderParams(int type, std::string&& packageName,
+                                          std::string&& className, std::string&& arguments,
                                           std::vector<NamedFd>&& dynamicArgs)
-      : mStaticArgs(std::move(staticArgs)),
+      : mType(type),
         mPackageName(std::move(packageName)),
+        mClassName(std::move(className)),
+        mArguments(std::move(arguments)),
         mDynamicArgs(std::move(dynamicArgs)) {}
 
 inline int FilesystemConnector::writeBlocks(const incfs_new_data_block blocks[], int blocksCount) {
