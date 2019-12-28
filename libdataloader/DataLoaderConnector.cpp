@@ -255,6 +255,9 @@ public:
                   jobject managedParams) {
         mDataLoader = factory->onCreate(factory, &params.ndkDataLoaderParams(), this, this, mJvm,
                                         mService, managedParams);
+        if (checkAndClearJavaException("onCreate"sv)) {
+            return false;
+        }
         if (!mDataLoader) {
             return false;
         }
@@ -266,7 +269,11 @@ public:
     }
     bool onStart() {
         CHECK(mDataLoader);
-        if (!mDataLoader->onStart(mDataLoader)) {
+        bool result = mDataLoader->onStart(mDataLoader);
+        if (checkAndClearJavaException("onStart"sv)) {
+            result = false;
+        }
+        if (!result) {
             JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
             const auto& jni = jniIds(env);
             reportStatusViaCallback(env, mListener, mStorageId, jni.constants.DATA_LOADER_STOPPED);
@@ -280,6 +287,7 @@ public:
     void onStop() {
         CHECK(mDataLoader);
         mDataLoader->onStop(mDataLoader);
+        checkAndClearJavaException("onStop"sv);
 
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         const auto& jni = jniIds(env);
@@ -288,6 +296,7 @@ public:
     void onDestroy() {
         CHECK(mDataLoader);
         mDataLoader->onDestroy(mDataLoader);
+        checkAndClearJavaException("onDestroy"sv);
 
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         const auto& jni = jniIds(env);
@@ -296,17 +305,17 @@ public:
 
     bool onPrepareImage(jobject addedFiles, jobject removedFiles) {
         CHECK(mDataLoader);
+        bool result = mDataLoader->onPrepareImage(mDataLoader, addedFiles, removedFiles);
+        if (checkAndClearJavaException("onPrepareImage"sv)) {
+            result = false;
+        }
+
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         const auto& jni = jniIds(env);
-        if (mDataLoader->onPrepareImage(mDataLoader, addedFiles, removedFiles)) {
-            reportStatusViaCallback(env, mListener, mStorageId,
-                                    jni.constants.DATA_LOADER_IMAGE_READY);
-            return true;
-        } else {
-            reportStatusViaCallback(env, mListener, mStorageId,
-                                    jni.constants.DATA_LOADER_IMAGE_NOT_READY);
-            return false;
-        }
+        reportStatusViaCallback(env, mListener, mStorageId,
+                                result ? jni.constants.DATA_LOADER_IMAGE_READY
+                                       : jni.constants.DATA_LOADER_IMAGE_NOT_READY);
+        return result;
     }
 
     int onCmdLooperEvent(std::vector<PendingReadInfo>& pendingReads) {
@@ -359,6 +368,19 @@ public:
         }
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         return reportStatusViaCallback(env, mListener, mStorageId, status);
+    }
+
+    bool checkAndClearJavaException(std::string_view method) {
+        JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
+
+        if (!env->ExceptionCheck()) {
+            return false;
+        }
+
+        LOG(ERROR) << "Java exception during DataLoader::" << method;
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        return true;
     }
 
     const IncFsControl& control() const { return mControl; }
