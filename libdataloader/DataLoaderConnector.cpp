@@ -255,7 +255,7 @@ public:
                   jobject managedParams) {
         mDataLoader = factory->onCreate(factory, &params.ndkDataLoaderParams(), this, this, mJvm,
                                         mService, managedParams);
-        if (checkAndClearJavaException("onCreate"sv)) {
+        if (checkAndClearJavaException(__func__)) {
             return false;
         }
         if (!mDataLoader) {
@@ -270,7 +270,7 @@ public:
     bool onStart() {
         CHECK(mDataLoader);
         bool result = mDataLoader->onStart(mDataLoader);
-        if (checkAndClearJavaException("onStart"sv)) {
+        if (checkAndClearJavaException(__func__)) {
             result = false;
         }
         if (!result) {
@@ -287,7 +287,7 @@ public:
     void onStop() {
         CHECK(mDataLoader);
         mDataLoader->onStop(mDataLoader);
-        checkAndClearJavaException("onStop"sv);
+        checkAndClearJavaException(__func__);
 
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         const auto& jni = jniIds(env);
@@ -296,7 +296,7 @@ public:
     void onDestroy() {
         CHECK(mDataLoader);
         mDataLoader->onDestroy(mDataLoader);
-        checkAndClearJavaException("onDestroy"sv);
+        checkAndClearJavaException(__func__);
 
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         const auto& jni = jniIds(env);
@@ -306,7 +306,7 @@ public:
     bool onPrepareImage(jobject addedFiles, jobject removedFiles) {
         CHECK(mDataLoader);
         bool result = mDataLoader->onPrepareImage(mDataLoader, addedFiles, removedFiles);
-        if (checkAndClearJavaException("onPrepareImage"sv)) {
+        if (checkAndClearJavaException(__func__)) {
             result = false;
         }
 
