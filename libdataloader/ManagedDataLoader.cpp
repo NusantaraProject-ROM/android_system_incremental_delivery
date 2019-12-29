@@ -97,6 +97,9 @@ bool ManagedDataLoader::onCreate(const android::dataloader::DataLoaderParams&,
         LOG(ERROR) << "Failed to create Java DataLoader.";
         return false;
     }
+    if (env->ExceptionCheck()) {
+        return false;
+    }
 
     mDataLoader = env->NewGlobalRef(dataLoader);
     return env->CallBooleanMethod(mDataLoader, jni.dataLoaderOnCreate, dlp, ifsc);
