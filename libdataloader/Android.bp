@@ -19,14 +19,12 @@ cc_defaults {
     defaults: ["linux_bionic_supported"],
     export_include_dirs: ["include/"],
     local_include_dirs: ["include/"],
-    static_libs: [
-        "libbase",
-        "libnativehelper",
-        "libutils",
-    ],
     shared_libs: [
+        "libbase",
         "libincfs",
         "liblog",
+        "libnativehelper",
+        "libutils",
     ],
 }
 
