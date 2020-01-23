@@ -88,8 +88,6 @@ struct DataLoaderFactory {
 };
 void DataLoader_Initialize(struct DataLoaderFactory*);
 
-bool DataLoaderService_OnPrepareImage(jint storageId, jobject addedFiles, jobject removedFiles);
-
 void DataLoader_FilesystemConnector_writeData(DataLoaderFilesystemConnectorPtr, jstring name,
                                               jlong offsetBytes, jlong lengthBytes,
                                               jobject incomingFd);
@@ -107,11 +105,12 @@ int DataLoader_StatusListener_reportStatus(DataLoaderStatusListenerPtr listener,
 // DataLoaderService JNI
 bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jobject control,
                                 jobject params, jobject listener);
-bool DataLoaderService_OnStart(jint storageId);
-bool DataLoaderService_OnStop(jint storageId);
-bool DataLoaderService_OnDestroy(jint storageId);
+bool DataLoaderService_OnStart(JNIEnv* env, jint storageId);
+bool DataLoaderService_OnStop(JNIEnv* env, jint storageId);
+bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId);
 
-bool DataLoaderService_OnPrepareImage(jint storageId, jobject addedFiles, jobject removedFiles);
+bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobject addedFiles,
+                                      jobject removedFiles);
 
 __END_DECLS
 

@@ -262,9 +262,6 @@ public:
             return false;
         }
 
-        JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
-        const auto& jni = jniIds(env);
-        reportStatusViaCallback(env, mListener, mStorageId, jni.constants.DATA_LOADER_CREATED);
         return true;
     }
     bool onStart() {
@@ -273,34 +270,17 @@ public:
         if (checkAndClearJavaException(__func__)) {
             result = false;
         }
-        if (!result) {
-            JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
-            const auto& jni = jniIds(env);
-            reportStatusViaCallback(env, mListener, mStorageId, jni.constants.DATA_LOADER_STOPPED);
-            return false;
-        }
-        JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
-        const auto& jni = jniIds(env);
-        reportStatusViaCallback(env, mListener, mStorageId, jni.constants.DATA_LOADER_STARTED);
-        return true;
+        return result;
     }
     void onStop() {
         CHECK(mDataLoader);
         mDataLoader->onStop(mDataLoader);
         checkAndClearJavaException(__func__);
-
-        JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
-        const auto& jni = jniIds(env);
-        reportStatusViaCallback(env, mListener, mStorageId, jni.constants.DATA_LOADER_STOPPED);
     }
     void onDestroy() {
         CHECK(mDataLoader);
         mDataLoader->onDestroy(mDataLoader);
         checkAndClearJavaException(__func__);
-
-        JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
-        const auto& jni = jniIds(env);
-        reportStatusViaCallback(env, mListener, mStorageId, jni.constants.DATA_LOADER_DESTROYED);
     }
 
     bool onPrepareImage(jobject addedFiles, jobject removedFiles) {
@@ -309,12 +289,6 @@ public:
         if (checkAndClearJavaException(__func__)) {
             result = false;
         }
-
-        JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
-        const auto& jni = jniIds(env);
-        reportStatusViaCallback(env, mListener, mStorageId,
-                                result ? jni.constants.DATA_LOADER_IMAGE_READY
-                                       : jni.constants.DATA_LOADER_IMAGE_NOT_READY);
         return result;
     }
 
@@ -384,6 +358,7 @@ public:
     }
 
     const IncFsControl& control() const { return mControl; }
+    jobject listener() const { return mListener; }
 
 private:
     JavaVM* mJvm = nullptr;
@@ -573,11 +548,15 @@ int DataLoader_StatusListener_reportStatus(DataLoaderStatusListenerPtr listener,
 
 bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jobject control,
                                 jobject params, jobject listener) {
-    auto reportNotReady = [listener, storageId](JNIEnv* env) {
+    auto reportDestroyed = [env, storageId](jobject listener) {
+        if (listener) {
+            return;
+        }
         const auto& jni = jniIds(env);
         reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_DESTROYED);
     };
-    std::unique_ptr<JNIEnv, decltype(reportNotReady)> reportNotReadyOnExit(env, reportNotReady);
+    std::unique_ptr<_jobject, decltype(reportDestroyed)> reportDestroyedOnExit(listener,
+                                                                               reportDestroyed);
 
     auto nativeControl = createIncFsControlFromManaged(env, control);
     ALOGE("DataLoader::create1 cmd: %d/%s", nativeControl.cmdFd,
@@ -615,12 +594,26 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
         }
     }
 
-    reportNotReadyOnExit.release();
+    reportDestroyedOnExit.release();
+
+    const auto& jni = jniIds(env);
+    reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_CREATED);
+
     return true;
 }
 
-bool DataLoaderService_OnStart(jint storageId) {
+bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
+    auto reportStopped = [env, storageId](jobject listener) {
+        if (listener) {
+            return;
+        }
+        const auto& jni = jniIds(env);
+        reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_STOPPED);
+    };
+    std::unique_ptr<_jobject, decltype(reportStopped)> reportStoppedOnExit(nullptr, reportStopped);
+
     IncFsControl control;
+    jobject listener;
     DataLoaderConnectorPtr dataLoaderConnector;
     {
         std::lock_guard lock{globals().dataLoaderConnectorsLock};
@@ -629,6 +622,10 @@ bool DataLoaderService_OnStart(jint storageId) {
             ALOGE("Failed to start id(%d): not found", storageId);
             return false;
         }
+
+        listener = dlIt->second->listener();
+        reportStoppedOnExit.reset(listener);
+
         dataLoaderConnector = dlIt->second;
         if (!dataLoaderConnector->onStart()) {
             ALOGE("Failed to start id(%d): onStart returned false", storageId);
@@ -662,10 +659,24 @@ bool DataLoaderService_OnStart(jint storageId) {
         logLooper().wake();
     }
 
+    reportStoppedOnExit.release();
+
+    const auto& jni = jniIds(env);
+    reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_STARTED);
+
     return true;
 }
 
-bool DataLoaderService_OnStop(jint storageId) {
+bool DataLoaderService_OnStop(JNIEnv* env, jint storageId) {
+    auto reportStopped = [env, storageId](jobject listener) {
+        if (listener) {
+            return;
+        }
+        const auto& jni = jniIds(env);
+        reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_STOPPED);
+    };
+    std::unique_ptr<_jobject, decltype(reportStopped)> reportStoppedOnExit(nullptr, reportStopped);
+
     IncFsControl control;
     {
         std::lock_guard lock{globals().dataLoaderConnectorsLock};
@@ -675,6 +686,8 @@ bool DataLoaderService_OnStop(jint storageId) {
             return false;
         }
         control = dlIt->second->control();
+
+        reportStoppedOnExit.reset(dlIt->second->listener());
     }
 
     if (control.cmdFd >= 0) {
@@ -702,8 +715,18 @@ bool DataLoaderService_OnStop(jint storageId) {
     return true;
 }
 
-bool DataLoaderService_OnDestroy(jint storageId) {
-    DataLoaderService_OnStop(storageId);
+bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId) {
+    DataLoaderService_OnStop(env, storageId);
+
+    auto reportDestroyed = [env, storageId](jobject listener) {
+        if (listener) {
+            return;
+        }
+        const auto& jni = jniIds(env);
+        reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_DESTROYED);
+    };
+    std::unique_ptr<_jobject, decltype(reportDestroyed)> reportDestroyedOnExit(nullptr,
+                                                                               reportDestroyed);
 
     std::lock_guard lock{globals().dataLoaderConnectorsLock};
     auto dlIt = globals().dataLoaderConnectors.find(storageId);
@@ -711,19 +734,36 @@ bool DataLoaderService_OnDestroy(jint storageId) {
         ALOGE("Failed to remove id(%d): not found", storageId);
         return false;
     }
+    reportDestroyedOnExit.reset(env->NewLocalRef(dlIt->second->listener()));
+
     auto&& dataLoaderConnector = dlIt->second;
     dataLoaderConnector->onDestroy();
     globals().dataLoaderConnectors.erase(dlIt);
+
     return true;
 }
 
-bool DataLoaderService_OnPrepareImage(jint storageId, jobject addedFiles, jobject removedFiles) {
-    std::lock_guard lock{globals().dataLoaderConnectorsLock};
-    auto dlIt = globals().dataLoaderConnectors.find(storageId);
-    if (dlIt == globals().dataLoaderConnectors.end()) {
-        ALOGE("Failed to handle onPrepareImage for id(%d): not found", storageId);
-        return false;
+bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobject addedFiles,
+                                      jobject removedFiles) {
+    jobject listener;
+    bool result;
+    {
+        std::lock_guard lock{globals().dataLoaderConnectorsLock};
+        auto dlIt = globals().dataLoaderConnectors.find(storageId);
+        if (dlIt == globals().dataLoaderConnectors.end()) {
+            ALOGE("Failed to handle onPrepareImage for id(%d): not found", storageId);
+            return false;
+        }
+        listener = dlIt->second->listener();
+
+        auto&& dataLoaderConnector = dlIt->second;
+        result = dataLoaderConnector->onPrepareImage(addedFiles, removedFiles);
     }
-    auto&& dataLoaderConnector = dlIt->second;
-    return dataLoaderConnector->onPrepareImage(addedFiles, removedFiles);
+
+    const auto& jni = jniIds(env);
+    reportStatusViaCallback(env, listener, storageId,
+                            result ? jni.constants.DATA_LOADER_IMAGE_READY
+                                   : jni.constants.DATA_LOADER_IMAGE_NOT_READY);
+
+    return result;
 }
