@@ -17,304 +17,649 @@
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
+#include <android-base/parsebool.h>
 #include <android-base/properties.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
+#include <dirent.h>
 #include <errno.h>
 #include <libgen.h>
 #include <sys/mount.h>
 #include <sys/poll.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 #include <sys/vfs.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #include <chrono>
 #include <fstream>
+#include <iterator>
+#include <mutex>
 #include <optional>
 #include <string_view>
 
 #include "MountRegistry.h"
 #include "path.h"
 
-namespace {
-namespace impl {
-
 using namespace std::literals;
 using namespace android::incfs;
-namespace base = android::base;
+namespace ab = android::base;
 
-struct Control {
-    Control(int error) : cmd(error), log(error) {}
-    Control(base::unique_fd&& cmd, base::unique_fd&& log)
-          : cmd(std::move(cmd)), log(std::move(log)) {}
-
-    base::unique_fd cmd;
-    base::unique_fd log;
-};
-
-MountRegistry& registry() {
+static MountRegistry& registry() {
     static MountRegistry instance;
     return instance;
 }
 
-base::unique_fd openRaw(std::string_view dir, std::string_view name) {
-    auto file = base::StringPrintf("%.*s/%.*s", (int)dir.size(), dir.data(), (int)name.size(),
-                                   name.data());
-    auto fd = base::unique_fd(TEMP_FAILURE_RETRY(::open(file.c_str(), O_RDWR)));
+static ab::unique_fd openRaw(std::string_view file) {
+    auto fd = ab::unique_fd(::open(details::c_str(file), O_RDONLY | O_CLOEXEC));
     if (fd < 0) {
-        const auto error = errno;
-        PLOG(ERROR) << "[incfs] failed to open IncFS file " << file;
-        return base::unique_fd{-error};
+        return ab::unique_fd{-errno};
     }
     return fd;
 }
 
-base::unique_fd openCmd(std::string_view dir) {
-    return openRaw(dir, ".cmd");
-}
-base::unique_fd openLog(std::string_view dir) {
-    return openRaw(dir, ".log");
+static ab::unique_fd openRaw(std::string_view dir, std::string_view name) {
+    return openRaw(path::join(dir, name));
 }
 
-static std::optional<Version> readIncFsVersion() {
-    const std::string sSysfsVersionFile = "/sys/fs/" + std::string(INCFS_NAME) + "/version";
+static ab::unique_fd openCmd(std::string_view dir) {
+    return openRaw(dir, INCFS_PENDING_READS_FILENAME);
+}
+static ab::unique_fd openLog(std::string_view dir) {
+    return openRaw(dir, INCFS_LOG_FILENAME);
+}
+static ab::unique_fd openPendingReads(std::string_view dir) {
+    return openRaw(dir, INCFS_PENDING_READS_FILENAME);
+}
 
-    std::ifstream verFile(sSysfsVersionFile);
-    if (!verFile) {
+static std::string root(int fd) {
+    auto cmdFile = path::fromFd(fd);
+    if (cmdFile.empty()) {
+        LOG(INFO) << __func__ << "(): name empty for " << fd;
         return {};
     }
-    Version version = -1;
-    if (!(verFile >> version)) {
+    auto res = path::dirName(cmdFile);
+    if (res.empty()) {
+        LOG(INFO) << __func__ << "(): dirname empty for " << cmdFile;
         return {};
     }
-    return version > 0 ? std::optional(version) : std::nullopt;
+    if (cmdFile.data() == res.data() || cmdFile.starts_with(res)) {
+        cmdFile.resize(res.size());
+        return cmdFile;
+    }
+    return std::string(res);
 }
 
-Version version() {
-    return readIncFsVersion().value_or(kVersionNone);
+static Features readIncFsFeatures() {
+    static const char kSysfsFeaturesDir[] = "/sys/fs/" INCFS_NAME "/features";
+    const auto dir = path::openDir(kSysfsFeaturesDir);
+    if (!dir) {
+        return Features::none;
+    }
+
+    int res = Features::none;
+    while (auto entry = ::readdir(dir.get())) {
+        if (entry->d_type != DT_REG) {
+            continue;
+        }
+        if (entry->d_name == "corefs"sv) {
+            res |= Features::core | Features::externalId;
+        }
+        if (entry->d_name == "uid_timeouts"sv) {
+            res |= Features::uidTimeouts;
+        }
+    }
+
+    return Features(res);
 }
 
-// TODO: make this function public in android::fs_mgr.
-static bool isFsAvailable(const std::string& filesystem) {
-    static constexpr auto kProcFilesystems = "/proc/filesystems"sv;
+IncFsFeatures IncFs_Features() {
+    return IncFsFeatures(readIncFsFeatures());
+}
+
+static bool isFsAvailable() {
+    static const char kProcFilesystems[] = "/proc/filesystems";
     std::string filesystems;
-    if (!android::base::ReadFileToString(kProcFilesystems.data(), &filesystems)) {
+    if (!ab::ReadFileToString(kProcFilesystems, &filesystems)) {
         return false;
     }
-    return filesystems.find("\t" + filesystem + "\n") != std::string::npos;
+    return filesystems.find("\t" INCFS_NAME "\n") != std::string::npos;
 }
 
-bool enabled() {
-    // First check if incfs is installed on the device
-    if (!isFsAvailable(INCFS_NAME)) {
-        return false;
+std::string_view incFsPropertyValue() {
+    static const std::string kValue = ab::GetProperty("ro.incremental.enable"s, {});
+    return kValue;
+}
+
+static std::pair<bool, std::string_view> parseProperty(std::string_view property) {
+    auto boolVal = ab::ParseBool(property);
+    if (boolVal == ab::ParseBoolResult::kTrue) {
+        return {isFsAvailable(), {}};
     }
-    // Check if property is enabled (default is true)
-    // TODO: change default to false
-    static constexpr auto kIncrementalEnabledProperty = "persist.incremental.enabled"sv;
-    return base::GetBoolProperty(std::string(kIncrementalEnabledProperty), true /*false*/);
+    if (boolVal == ab::ParseBoolResult::kFalse) {
+        return {false, {}};
+    }
+
+    // Don't load the module at once, but instead only check if it is loadable.
+    static const auto kModulePrefix = "module:"sv;
+    if (property.starts_with(kModulePrefix)) {
+        const auto modulePath = property.substr(kModulePrefix.size());
+        return {::access(details::c_str(modulePath), R_OK | X_OK), modulePath};
+    }
+    return {false, {}};
+}
+
+namespace {
+
+class IncFsInit {
+public:
+    IncFsInit() {
+        auto [featureEnabled, moduleName] = parseProperty(incFsPropertyValue());
+        featureEnabled_ = featureEnabled;
+        moduleName_ = moduleName;
+        loaded_ = featureEnabled_ && isFsAvailable();
+    }
+
+    bool enabled() const { return featureEnabled_; }
+    bool enabledAndReady() const {
+        if (!featureEnabled_) {
+            return false;
+        }
+        if (moduleName_.empty()) {
+            return true;
+        }
+        if (loaded_) {
+            return true;
+        }
+        std::call_once(loadedFlag_, [this] {
+            const ab::unique_fd fd(TEMP_FAILURE_RETRY(
+                    ::open(details::c_str(moduleName_), O_RDONLY | O_NOFOLLOW | O_CLOEXEC)));
+            if (fd < 0) {
+                PLOG(ERROR) << "could not open IncFs kernel module \"" << moduleName_ << '"';
+                return;
+            }
+
+            const auto rc = syscall(__NR_finit_module, fd.get(), "", 0);
+            if (rc < 0) {
+                PLOG(ERROR) << "finit_module for IncFs \"" << moduleName_ << "\" failed";
+                return;
+            }
+            if (!isFsAvailable()) {
+                LOG(ERROR) << "loaded IncFs kernel module \"" << moduleName_
+                           << "\" but incremental-fs is still not available";
+            }
+            loaded_ = true;
+            LOG(INFO) << "successfully loaded IncFs kernel module \"" << moduleName_ << '"';
+        });
+        return loaded_;
+    }
+
+private:
+    bool featureEnabled_;
+    std::string_view moduleName_;
+    mutable std::once_flag loadedFlag_;
+    mutable bool loaded_;
+};
+
+} // namespace
+
+static IncFsInit& init() {
+    static IncFsInit initer;
+    return initer;
+}
+
+bool IncFs_IsEnabled() {
+    return init().enabled();
 }
 
 bool isIncFsPath(const char* path) {
-    if (!enabled()) {
+    struct statfs fs = {};
+    if (::statfs(path, &fs) != 0) {
+        PLOG(ERROR) << __func__ << "(): could not statfs " << path;
         return false;
     }
 
-    struct statfs fs;
-    memset(&fs, 0, sizeof(fs));
-    if (statfs(path, &fs) != 0) {
-        PLOG(ERROR) << "Could not statfs " << path;
-        return false;
-    }
-
-    return fs.f_type == INCFS_MAGIC_NUMBER;
+    return fs.f_type == (decltype(fs.f_type))INCFS_MAGIC_NUMBER;
 }
 
-Control mount(std::string_view imagePath, std::string_view targetDir, int32_t flags,
-              std::chrono::milliseconds timeout, int mode) {
-    if (!enabled()) {
-        LOG(WARNING) << "[incfs] Feature is not enabled";
-        return {-ENOTSUP};
+static int isDir(const char* path) {
+    struct stat st;
+    if (::stat(path, &st) != 0) {
+        return -errno;
     }
+    if (!S_ISDIR(st.st_mode)) {
+        return -ENOTDIR;
+    }
+    return 0;
+}
 
-    if (isIncFsPath(details::c_str(targetDir))) {
+static bool isAbsolute(const char* path) {
+    return path && path[0] == '/';
+}
+
+static int isValidMountTarget(const char* path) {
+    if (!isAbsolute(path)) {
+        return -EINVAL;
+    }
+    if (isIncFsPath(path)) {
         LOG(ERROR) << "[incfs] mounting over existing incfs mount is not allowed";
-        return {-EINVAL};
+        return -EINVAL;
+    }
+    if (const auto err = isDir(path); err != 0) {
+        return err;
+    }
+    if (const auto err = path::isEmptyDir(path); err != 0) {
+        return err;
+    }
+    return 0;
+}
+
+static int rmDirContent(const char* path) {
+    auto dir = path::openDir(path);
+    if (!dir) {
+        return -EINVAL;
+    }
+    while (auto entry = ::readdir(dir.get())) {
+        if (entry->d_name == "."sv || entry->d_name == ".."sv) {
+            continue;
+        }
+        auto fullPath = ab::StringPrintf("%s/%s", path, entry->d_name);
+        if (entry->d_type == DT_DIR) {
+            if (const auto err = rmDirContent(fullPath.c_str()); err != 0) {
+                return err;
+            }
+            if (const auto err = ::rmdir(fullPath.c_str()); err != 0) {
+                return err;
+            }
+        } else {
+            if (const auto err = ::unlink(fullPath.c_str()); err != 0) {
+                return err;
+            }
+        }
+    }
+    return 0;
+}
+
+static std::string makeMountOptionsString(IncFsMountOptions options) {
+    return ab::StringPrintf("read_timeout_ms=%u,readahead=0,rlog_pages=%u,rlog_wakeup_cnt=1",
+                            unsigned(options.defaultReadTimeoutMs),
+                            unsigned(options.readLogBufferPages < 0
+                                             ? INCFS_DEFAULT_PAGE_READ_BUFFER_PAGES
+                                             : options.readLogBufferPages));
+}
+
+static UniqueControl makeControl(const char* root) {
+    UniqueControl uc;
+    uc.cmd = openCmd(root).release();
+    if (uc.cmd < 0) {
+        return Control{-errno, -errno, -errno};
+    }
+    uc.pendingReads = openPendingReads(root).release();
+    if (uc.pendingReads < 0) {
+        return Control{-errno, -errno, -errno};
+    }
+    uc.logs = openLog(root).release();
+    // logs may be absent, that's fine
+    return uc;
+}
+
+static std::string makeCommandPath(std::string_view root, std::string_view item) {
+    auto [itemRoot, subpath] = registry().rootAndSubpathFor(item);
+    if (itemRoot != root) {
+        return {};
+    }
+    // TODO: add "/.cmd/" if we decide to use a separate control tree.
+    return path::join(itemRoot, subpath);
+}
+
+static void toString(IncFsFileId id, char* out) {
+    // Make sure this function matches the one in the kernel (e.g. same case for a-f digits).
+    static constexpr char kHexChar[] = "0123456789abcdef";
+
+    for (auto item = std::begin(id.data); item != std::end(id.data); ++item, out += 2) {
+        out[0] = kHexChar[(*item & 0xf0) >> 4];
+        out[1] = kHexChar[(*item & 0x0f)];
+    }
+}
+
+static std::string toStringImpl(IncFsFileId id) {
+    std::string res(kIncFsFileIdStringLength, '\0');
+    toString(id, res.data());
+    return res;
+}
+
+static IncFsFileId toFileIdImpl(std::string_view str) {
+    if (str.size() != kIncFsFileIdStringLength) {
+        return kIncFsInvalidFileId;
     }
 
-    int openFlags = O_CREAT | O_RDWR | O_CLOEXEC;
-    if (flags & android::incfs::createOnly) {
-        openFlags |= O_EXCL;
-    } else if (flags & android::incfs::truncate) {
-        openFlags |= O_TRUNC;
+    IncFsFileId res;
+    auto out = (char*)&res;
+    for (auto it = str.begin(); it != str.end(); it += 2, ++out) {
+        static const auto fromChar = [](char src) -> char {
+            if (src >= '0' && src <= '9') {
+                return src - '0';
+            }
+            if (src >= 'a' && src <= 'f') {
+                return src - 'a' + 10;
+            }
+            return -1;
+        };
+
+        const char c[2] = {fromChar(it[0]), fromChar(it[1])};
+        if (c[0] == -1 || c[1] == -1) {
+            errno = EINVAL;
+            return kIncFsInvalidFileId;
+        }
+        *out = (c[0] << 4) | c[1];
     }
-    auto backingFd =
-            base::unique_fd(TEMP_FAILURE_RETRY(::open(details::c_str(imagePath), openFlags, mode)));
-    if (backingFd < 0) {
-        const auto error = errno;
-        PLOG(ERROR) << "[incfs] failed to open or create an image file: " << imagePath;
-        return {-error};
+    return res;
+}
+
+int IncFs_FileIdToString(IncFsFileId id, char* out) {
+    if (!out) {
+        return -EINVAL;
+    }
+    toString(id, out);
+    return 0;
+}
+
+IncFsFileId IncFs_FileIdFromString(const char* in) {
+    return toFileIdImpl({in, kIncFsFileIdStringLength});
+}
+
+IncFsControl IncFs_Mount(const char* backingPath, const char* targetDir,
+                         IncFsMountOptions options) {
+    if (!init().enabledAndReady()) {
+        LOG(WARNING) << "[incfs] Feature is not enabled";
+        return {-ENOTSUP, -ENOTSUP, -ENOTSUP};
     }
 
-    using namespace std::chrono;
-    auto opts = base::StringPrintf("backing_fd=%d,read_timeout_ms=%u,readahead=0,rlog_pages=%u",
-                                   backingFd.get(),
-                                   (unsigned)duration_cast<milliseconds>(timeout).count(),
-                                   unsigned(INCFS_DEFAULT_PAGE_READ_BUFFER_PAGES));
-    if (TEMP_FAILURE_RETRY(::mount(INCFS_NAME, details::c_str(targetDir), INCFS_NAME,
-                                   MS_NOSUID | MS_NODEV | MS_NOATIME, opts.c_str()))) {
+    if (options.uidReadTimeoutCount > 0 && (readIncFsFeatures() & Features::uidTimeouts) == 0) {
+        return {-ENOTSUP, -ENOTSUP, -ENOTSUP};
+    }
+
+    if (auto err = isValidMountTarget(targetDir); err != 0) {
+        return {err, err, err};
+    }
+    if (!isAbsolute(backingPath)) {
+        return {-EINVAL, -EINVAL, -EINVAL};
+    }
+
+    if (options.flags & createOnly) {
+        if (const auto err = path::isEmptyDir(backingPath); err != 0) {
+            return {err, err, err};
+        }
+    } else if (options.flags & android::incfs::truncate) {
+        if (const auto err = rmDirContent(backingPath); err != 0) {
+            return {err, err, err};
+        }
+    }
+
+    const auto opts = makeMountOptionsString(options);
+    if (::mount(backingPath, targetDir, INCFS_NAME, MS_NOSUID | MS_NODEV | MS_NOATIME,
+                opts.c_str())) {
         const auto error = errno;
         PLOG(ERROR) << "[incfs] Failed to mount IncFS filesystem: " << targetDir;
-        return {-error};
-    }
-
-    LOG(DEBUG) << "[incfs] mounted IncFS at " << targetDir << ", backing file " << imagePath
-               << ", opts " << opts;
-
-    auto fd = openCmd(targetDir);
-    if (fd < 0) {
-        unmount(targetDir);
-        return {fd};
+        return {-error, -error, -error};
     }
 
     registry().addRoot(targetDir);
-    return {std::move(fd), openLog(targetDir)};
+
+    auto control = makeControl(targetDir);
+    if (control.cmd < 0) {
+        return std::move(control);
+    }
+    LOG(INFO) << "Opened control fd " << control.cmd << " " << fcntl(control.cmd, F_GETFD);
+    return control.release();
 }
 
-int bindMount(std::string_view source, std::string_view target) {
-    if (!enabled()) {
-        return -ENOTSUP;
-    }
-
-    if (TEMP_FAILURE_RETRY(::mount(details::c_str(source), details::c_str(target), nullptr, MS_BIND,
-                                   nullptr))) {
-        PLOG(ERROR) << "[incfs] Failed to bind mount " << source << " to " << target;
-        return -errno;
-    }
-    registry().addBind(source, target);
-    return 0;
-}
-
-int unmount(std::string_view dir) {
-    if (!enabled()) {
-        return -ENOTSUP;
-    }
-
-    registry().removeBind(dir);
-    errno = 0;
-    if (TEMP_FAILURE_RETRY(::umount2(details::c_str(dir), MNT_FORCE)) == 0 || errno == EINVAL ||
-        errno == ENOENT) {
-        // EINVAL - not a mount point, ENOENT - doesn't exist at all
-        return -errno;
-    }
-    PLOG(WARNING) << __func__ << ": umount(force) failed, detaching '" << dir << '\'';
-    errno = 0;
-    if (!TEMP_FAILURE_RETRY(::umount2(details::c_str(dir), MNT_DETACH))) {
-        return 0;
-    }
-    PLOG(INFO) << __func__ << ": umount(detach) returned non-zero for '" << dir << '\'';
-    return 0;
-}
-
-static int sendInstruction(int fd, incfs_instruction& inst) {
-    inst.version = INCFS_HEADER_VER;
-    if (::ioctl(fd, INCFS_IOC_PROCESS_INSTRUCTION, (void*)&inst) == 0) {
-        return 0;
-    }
-    return -errno;
-}
-
-static int64_t addInodeToDir(int fd, Inode inode, std::string_view name, uint64_t dirInode) {
-    LOG(INFO) << __func__ << " @ " << fd << " / " << dirInode << " / " << name << " adding "
-              << inode;
-
-    auto inst = incfs_instruction{.type = INCFS_INSTRUCTION_ADD_DIR_ENTRY,
-                                  .dir_entry = {.dir_ino = dirInode,
-                                                .child_ino = uint64_t(inode),
-                                                .name = uint64_t(name.data()),
-                                                .name_len = uint16_t(name.size())}};
-    const auto res = sendInstruction(fd, inst);
-    if (res < 0) {
-        LOG(ERROR) << "addInodeToDir failed: " << res;
-        return res;
-    }
-    if (res != 0) {
-        return -EIO;
-    }
-    return int64_t(inode);
-}
-
-static Inode makeInode(int fd, std::string_view name, Inode parentInode, Size size, mode_t mode,
-                       std::string_view metadata) {
-    // TODO(zyy): add signature information
-
-    LOG(INFO) << __func__ << "(" << ((mode & S_IFDIR) ? "dir" : "file") << ") @ " << fd << " / "
-              << parentInode << " / " << name << " of " << size << " bytes, '" << metadata << '\'';
-
-    if (metadata.size() > INCFS_MAX_FILE_ATTR_SIZE) {
-        LOG(ERROR) << "Input metadata size " << metadata.size() << " is bigger than max "
-                   << INCFS_MAX_FILE_ATTR_SIZE;
-        return -E2BIG;
-    }
-
-    auto inst = incfs_instruction{.type = INCFS_INSTRUCTION_NEW_FILE,
-                                  .file = {.size = uint64_t(size),
-                                           .mode = uint16_t(mode),
-                                           .file_attr_len = uint32_t(metadata.size()),
-                                           .file_attr = uint64_t(metadata.data())}};
-
-    auto res = sendInstruction(fd, inst);
-    if (res < 0) {
-        LOG(ERROR) << "makeInode failed: " << res;
-        return res;
-    }
-    if (res != 0) {
-        return -EIO;
-    }
-
-    return addInodeToDir(fd, inst.file.ino_out, name, parentInode);
-}
-
-Control open(std::string_view dir) {
+IncFsControl IncFs_Open(const char* dir) {
     auto root = registry().rootFor(dir);
-    return {openCmd(root), openLog(root)};
-}
-
-Inode makeDir(int fd, std::string_view name, Inode parent, std::string_view metadata, int mode) {
-    return makeInode(fd, name, parent, 0, S_IFDIR | (mode & 0777), metadata);
-}
-
-Inode makeFile(int fd, std::string_view name, Inode parent, Size size, std::string_view metadata,
-               int mode) {
-    return makeInode(fd, name, parent, size, S_IFREG | (mode & 0777), metadata);
-}
-
-int link(int fd, Inode item, Inode targetParent, std::string_view name) {
-    const auto res = addInodeToDir(fd, item, name, targetParent);
-    return res < 0 ? int(res) : 0;
-}
-
-int unlink(int fd, Inode parent, std::string_view name) {
-    incfs_instruction inst = {.type = INCFS_INSTRUCTION_REMOVE_DIR_ENTRY,
-                              .dir_entry = {.dir_ino = uint64_t(parent),
-                                            .name = uint64_t(name.data()),
-                                            .name_len = uint16_t(name.size())}};
-
-    auto res = sendInstruction(fd, inst);
-    if (res < 0) {
-        return res;
+    if (root.empty()) {
+        return {-EINVAL, -EINVAL, -EINVAL};
     }
-    if (res != 0) {
-        return -EIO;
+    return makeControl(details::c_str(root)).release();
+}
+
+IncFsErrorCode IncFs_SetOptions(IncFsControl control, IncFsMountOptions options) {
+    auto root = ::root(control.cmd);
+    if (root.empty()) {
+        return -EINVAL;
+    }
+    auto opts = makeMountOptionsString(options);
+    if (::mount(nullptr, root.c_str(), nullptr, MS_REMOUNT | MS_NOSUID | MS_NODEV | MS_NOATIME,
+                opts.c_str()) != 0) {
+        const auto error = errno;
+        PLOG(ERROR) << "[incfs] Failed to remount IncFS filesystem: " << root;
+        return -error;
     }
     return 0;
 }
 
-int waitForReads(int fd, std::chrono::milliseconds timeout,
-                 incfs_pending_read_info pendingReadsBuffer[], size_t* pendingReadsBufferSize) {
+IncFsErrorCode IncFs_Root(IncFsControl control, char buffer[], size_t* bufferSize) {
+    std::string result = ::root(control.cmd);
+    if (*bufferSize <= result.size()) {
+        *bufferSize = result.size() + 1;
+        return -EOVERFLOW;
+    }
+    result.copy(buffer, result.size());
+    buffer[result.size()] = '\0';
+    *bufferSize = result.size();
+    return 0;
+}
+
+IncFsErrorCode IncFs_MakeFile(IncFsControl control, const char* path, int32_t mode, IncFsFileId id,
+                              IncFsNewFileParams params) {
+    auto [root, subpath] = registry().rootAndSubpathFor(path);
+    if (root.empty()) {
+        PLOG(WARNING) << "[incfs] makeFile failed for path " << path;
+        return -EINVAL;
+    }
+
+    const auto [subdir, name] = path::splitDirBase(subpath);
+    incfs_new_file_args args = {
+            .size = (uint64_t)params.size,
+            .mode = (uint16_t)mode,
+            .directory_path = (uint64_t)subdir.data(),
+            .file_name = (uint64_t)name.data(),
+            .file_attr = (uint64_t)params.metadata.data,
+            .file_attr_len = (uint32_t)params.metadata.size,
+    };
+    static_assert(sizeof(args.file_id.bytes) == sizeof(id.data));
+    memcpy(args.file_id.bytes, id.data, sizeof(args.file_id.bytes));
+
+    incfs_file_signature_info sigInfo = {};
+    if (params.verification.hashAlgorithm != INCFS_HASH_NONE) {
+        if (params.verification.rootHash.size < INCFS_MAX_HASH_SIZE) {
+            return -EINVAL;
+        }
+        sigInfo.root_hash = (uint64_t)params.verification.rootHash.data;
+        sigInfo.additional_data = (uint64_t)params.verification.additionalData.data;
+        sigInfo.additional_data_size = (uint32_t)params.verification.additionalData.size;
+        sigInfo.signature = (uint64_t)params.verification.signature.data;
+        sigInfo.signature_size = (uint32_t)params.verification.signature.size;
+        sigInfo.hash_tree_alg = params.verification.hashAlgorithm;
+    }
+    args.signature_info = (uint64_t)&sigInfo;
+
+    if (::ioctl(control.cmd, INCFS_IOC_CREATE_FILE, &args)) {
+        PLOG(WARNING) << "[incfs] makeFile failed for " << root << " / " << subdir << " / " << name
+                      << " of " << params.size << " bytes";
+        return -errno;
+    }
+    if (::chmod(path, mode)) {
+        PLOG(WARNING) << "[incfs] couldn't change the file mode to 0" << std::oct << mode;
+    }
+
+    return 0;
+}
+
+IncFsErrorCode IncFs_MakeDir(IncFsControl control, const char* path, int32_t mode) {
+    const auto root = ::root(control.cmd);
+    if (root.empty()) {
+        LOG(ERROR) << __func__ << "(): root is empty for " << path;
+        return -EINVAL;
+    }
+    auto commandPath = makeCommandPath(root, path);
+    if (commandPath.empty()) {
+        LOG(ERROR) << __func__ << "(): commandPath is empty for " << path;
+        return -EINVAL;
+    }
+    if (::mkdir(commandPath.c_str(), mode)) {
+        PLOG(ERROR) << __func__ << "(): mkdir failed for " << commandPath;
+        return -errno;
+    }
+    if (::chmod(path, mode)) {
+        PLOG(WARNING) << "[incfs] couldn't change the directory mode to 0" << std::oct << mode;
+    }
+
+    return 0;
+}
+
+static IncFsErrorCode getMetadata(const char* path, char buffer[], size_t* bufferSize) {
+    const auto res = ::getxattr(path, kMetadataAttrName, buffer, *bufferSize);
+    if (res < 0) {
+        if (errno == ERANGE) {
+            auto neededSize = ::getxattr(path, kMetadataAttrName, buffer, 0);
+            if (neededSize >= 0) {
+                *bufferSize = neededSize;
+                return 0;
+            }
+        }
+        return -errno;
+    }
+    *bufferSize = res;
+    return 0;
+}
+
+IncFsErrorCode IncFs_GetMetadataById(IncFsControl control, IncFsFileId fileId, char buffer[],
+                                     size_t* bufferSize) {
+    const auto root = ::root(control.cmd);
+    if (root.empty()) {
+        return -EINVAL;
+    }
+    auto name = path::join(root, kIndexDir, toStringImpl(fileId));
+    return getMetadata(details::c_str(name), buffer, bufferSize);
+}
+
+IncFsErrorCode IncFs_GetMetadataByPath(IncFsControl control, const char* path, char buffer[],
+                                       size_t* bufferSize) {
+    const auto pathRoot = registry().rootFor(path);
+    const auto root = ::root(control.cmd);
+    if (root.empty() || root != pathRoot) {
+        return -EINVAL;
+    }
+
+    return getMetadata(path, buffer, bufferSize);
+}
+
+IncFsFileId IncFs_GetId(IncFsControl control, const char* path) {
+    const auto pathRoot = registry().rootFor(path);
+    const auto root = ::root(control.cmd);
+    if (root.empty() || root != pathRoot) {
+        errno = EINVAL;
+        return kIncFsInvalidFileId;
+    }
+    char buffer[kIncFsFileIdStringLength];
+    const auto res = ::getxattr(path, kIdAttrName, buffer, sizeof(buffer));
+    if (res != sizeof(buffer)) {
+        return kIncFsInvalidFileId;
+    }
+    return toFileIdImpl({buffer, std::size(buffer)});
+}
+
+static IncFsErrorCode getSignature(int fd, char buffer[], size_t* bufferSize) {
+    incfs_get_file_sig_args args = {
+            .file_signature = (uint64_t)buffer,
+            .file_signature_buf_size = (uint32_t)*bufferSize,
+    };
+
+    auto res = ::ioctl(fd, INCFS_IOC_READ_FILE_SIGNATURE, &args);
+    if (res < 0) {
+        if (errno == E2BIG) {
+            *bufferSize = INCFS_MAX_SIGNATURE_SIZE;
+        }
+        return -errno;
+    }
+    *bufferSize = args.file_signature_len_out;
+    return 0;
+}
+
+IncFsErrorCode IncFs_GetSignatureById(IncFsControl control, IncFsFileId fileId, char buffer[],
+                                      size_t* bufferSize) {
+    const auto root = ::root(control.cmd);
+    if (root.empty()) {
+        return -EINVAL;
+    }
+    auto file = path::join(root, kIndexDir, toStringImpl(fileId));
+    auto fd = openRaw(file);
+    if (fd < 0) {
+        return fd.get();
+    }
+    return getSignature(fd, buffer, bufferSize);
+}
+
+IncFsErrorCode IncFs_GetSignatureByPath(IncFsControl control, const char* path, char buffer[],
+                                        size_t* bufferSize) {
+    const auto pathRoot = registry().rootFor(path);
+    const auto root = ::root(control.cmd);
+    if (root.empty() || root != pathRoot) {
+        return -EINVAL;
+    }
+    auto fd = openRaw(path);
+    if (fd < 0) {
+        return fd.get();
+    }
+    return getSignature(fd, buffer, bufferSize);
+}
+
+IncFsErrorCode IncFs_Link(IncFsControl control, const char* fromPath, const char* wherePath) {
+    auto root = ::root(control.cmd);
+    if (root.empty()) {
+        return -EINVAL;
+    }
+    auto cmdFrom = makeCommandPath(root, fromPath);
+    if (cmdFrom.empty()) {
+        return -EINVAL;
+    }
+    auto cmdWhere = makeCommandPath(root, wherePath);
+    if (cmdWhere.empty()) {
+        return -EINVAL;
+    }
+    if (::link(cmdFrom.c_str(), cmdWhere.c_str())) {
+        return -errno;
+    }
+    return 0;
+}
+
+IncFsErrorCode IncFs_Unlink(IncFsControl control, const char* path) {
+    auto root = ::root(control.cmd);
+    if (root.empty()) {
+        return -EINVAL;
+    }
+    auto cmdPath = makeCommandPath(root, path);
+    if (cmdPath.empty()) {
+        return -EINVAL;
+    }
+    if (::unlink(cmdPath.c_str())) {
+        if (errno == EISDIR) {
+            if (!::rmdir(cmdPath.c_str())) {
+                return 0;
+            }
+        }
+        return -errno;
+    }
+    return 0;
+}
+
+static int waitForReads(int fd, int32_t timeoutMs, incfs_pending_read_info pendingReadsBuffer[],
+                        size_t* pendingReadsBufferSize) {
     using namespace std::chrono;
-    auto hrTimeout = high_resolution_clock::duration(timeout);
+    auto hrTimeout = steady_clock::duration(milliseconds(timeoutMs));
 
     while (hrTimeout > hrTimeout.zero() || (!pendingReadsBuffer && hrTimeout == hrTimeout.zero())) {
         const auto startTs = steady_clock::now();
@@ -341,7 +686,8 @@ int waitForReads(int fd, std::chrono::milliseconds timeout,
         return hrTimeout < hrTimeout.zero() ? -ETIMEDOUT : 0;
     }
 
-    auto res = ::read(fd, pendingReadsBuffer, *pendingReadsBufferSize);
+    auto res =
+            ::read(fd, pendingReadsBuffer, *pendingReadsBufferSize * sizeof(*pendingReadsBuffer));
     if (res < 0) {
         const auto error = errno;
         PLOG(ERROR) << "read() failed";
@@ -359,12 +705,78 @@ int waitForReads(int fd, std::chrono::milliseconds timeout,
     return 0;
 }
 
-int writeBlocks(int fd, const incfs_new_data_block blocks[], int blocksCount) {
-    if (blocksCount < 0) {
+IncFsErrorCode IncFs_WaitForPendingReads(IncFsControl control, int32_t timeoutMs,
+                                         IncFsReadInfo buffer[], size_t* bufferSize) {
+    std::vector<incfs_pending_read_info> pendingReads;
+    pendingReads.resize(*bufferSize);
+    if (const auto res =
+                waitForReads(control.pendingReads, timeoutMs, pendingReads.data(), bufferSize)) {
+        return res;
+    }
+    for (size_t i = 0; i != *bufferSize; ++i) {
+        buffer[i] = IncFsReadInfo{
+                .bootClockTsUs = pendingReads[i].timestamp_us,
+                .block = (IncFsBlockIndex)pendingReads[i].block_index,
+                .serialNo = pendingReads[i].serial_number,
+        };
+        memcpy(&buffer[i].id.data, pendingReads[i].file_id.bytes, sizeof(buffer[i].id.data));
+    }
+    return 0;
+}
+
+IncFsErrorCode IncFs_WaitForPageReads(IncFsControl control, int32_t timeoutMs,
+                                      IncFsReadInfo buffer[], size_t* bufferSize) {
+    if (control.logs < 0) {
         return -EINVAL;
     }
-    if (blocksCount == 0) {
+    std::vector<incfs_pending_read_info> pendingReads;
+    pendingReads.resize(*bufferSize);
+    if (const auto res = waitForReads(control.logs, timeoutMs, pendingReads.data(), bufferSize)) {
+        return res;
+    }
+    for (size_t i = 0; i != *bufferSize; ++i) {
+        buffer[i] = IncFsReadInfo{
+                .bootClockTsUs = pendingReads[i].timestamp_us,
+                .block = (IncFsBlockIndex)pendingReads[i].block_index,
+                .serialNo = pendingReads[i].serial_number,
+        };
+        memcpy(&buffer[i].id.data, pendingReads[i].file_id.bytes, sizeof(buffer[i].id.data));
+    }
+    return 0;
+}
+
+static IncFsFd openWrite(const char* path) {
+    auto fd = ::open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return -errno;
+    }
+    return fd;
+}
+
+IncFsFd IncFs_OpenWriteByPath(IncFsControl control, const char* path) {
+    const auto pathRoot = registry().rootFor(path);
+    const auto root = ::root(control.cmd);
+    if (root.empty() || root != pathRoot) {
+        return -EINVAL;
+    }
+    return openWrite(makeCommandPath(root, path).c_str());
+}
+
+IncFsFd IncFs_OpenWriteById(IncFsControl control, IncFsFileId id) {
+    const auto root = ::root(control.cmd);
+    if (root.empty()) {
+        return -EINVAL;
+    }
+    auto name = path::join(root, kIndexDir, toStringImpl(id));
+    return openWrite(makeCommandPath(root, name).c_str());
+}
+
+static int writeBlocks(int fd, const incfs_new_data_block blocks[], int blocksCount) {
+    if (fd < 0 || blocksCount == 0) {
         return 0;
+    }
+    if (blocksCount < 0) {
+        return -EINVAL;
     }
 
     auto ptr = blocks;
@@ -393,121 +805,87 @@ int writeBlocks(int fd, const incfs_new_data_block blocks[], int blocksCount) {
     return ptr - blocks;
 }
 
-std::string root(int fd) {
-    auto cmdFile = path::fromFd(fd);
-    if (cmdFile.empty()) {
-        return {};
+IncFsErrorCode IncFs_WriteBlocks(const IncFsDataBlock blocks[], size_t blocksCount) {
+    incfs_new_data_block incfsBlocks[128];
+    int writtenCount = 0;
+    int incfsBlocksUsed = 0;
+    int lastBlockFd = -1;
+    for (size_t i = 0; i < blocksCount; ++i) {
+        if (lastBlockFd != blocks[i].fileFd || incfsBlocksUsed == std::size(incfsBlocks)) {
+            auto count = writeBlocks(lastBlockFd, incfsBlocks, incfsBlocksUsed);
+            if (count > 0) {
+                writtenCount += count;
+            }
+            if (count != incfsBlocksUsed) {
+                return writtenCount ? writtenCount : count;
+            }
+            lastBlockFd = blocks[i].fileFd;
+            incfsBlocksUsed = 0;
+        }
+        incfsBlocks[incfsBlocksUsed] = incfs_new_data_block{
+                .block_index = (uint32_t)blocks[i].pageIndex,
+                .data_len = blocks[i].dataSize,
+                .data = (uint64_t)blocks[i].data,
+                .compression = (uint8_t)blocks[i].compression,
+                .flags = uint8_t(blocks[i].kind == INCFS_BLOCK_KIND_HASH ? INCFS_BLOCK_FLAGS_HASH
+                                                                         : 0),
+        };
+        ++incfsBlocksUsed;
     }
-    auto res = ::dirname(cmdFile.c_str());
-    if (!res || !*res) {
-        return {};
+    auto count = writeBlocks(lastBlockFd, incfsBlocks, incfsBlocksUsed);
+    if (count > 0) {
+        writtenCount += count;
     }
-    return res;
+    return writtenCount ? writtenCount : count;
 }
 
-IncFsErrorCode getMetadata(int fd, Inode inode, char buffer[], size_t* bufferSize) {
-    incfs_get_file_attr_request request = {
-            .version = INCFS_HEADER_VER,
-            .ino = uint64_t(inode),
-            .file_attr = uint64_t(buffer),
-            .file_attr_buf_size = uint32_t(*bufferSize),
-    };
-    auto res = ::ioctl(fd, INCFS_IOC_READ_FILE_ATTR, &request);
-    if (res < 0) {
-        PLOG(ERROR) << "Driver call failed for inode " << inode;
-        return res;
-    }
-    if (request.file_attr_len_out > *bufferSize) {
-        LOG(ERROR) << "Not enough space in the buffer, " << request.file_attr_len_out << " vs "
-                   << INCFS_MAX_FILE_ATTR_SIZE << " max allowed in the driver API";
-        return -EOVERFLOW;
-    }
-    *bufferSize = request.file_attr_len_out;
-    return 0;
-}
-
-} // namespace impl
-} // namespace
-
-bool IncFs_Enabled() {
-    return impl::enabled();
-}
-IncFsVersion IncFs_Version() {
-    return impl::version();
-}
-
-IncFsErrorCode IncFs_IsIncFsPath(const char* path) {
-    return impl::isIncFsPath(path);
-}
-
-IncFsControl IncFs_Mount(const char* imagePath, const char* targetDir, int32_t flags,
-                         int32_t timeoutMs, int32_t mode) {
-    auto control =
-            impl::mount(imagePath, targetDir, flags, std::chrono::milliseconds(timeoutMs), mode);
-    return {control.cmd.release(), control.log.release()};
-}
-IncFsErrorCode IncFs_Unmount(const char* dir) {
-    return impl::unmount(dir);
-}
 IncFsErrorCode IncFs_BindMount(const char* sourceDir, const char* targetDir) {
-    return impl::bindMount(sourceDir, targetDir);
-}
-
-IncFsErrorCode IncFs_Root(IncFsControl control, char buffer[], size_t* bufferSize) {
-    std::string result = impl::root(control.cmdFd);
-    if (*bufferSize <= result.size()) {
-        return -EOVERFLOW;
+    if (!enabled()) {
+        return -ENOTSUP;
     }
-    *bufferSize = result.size();
-    result.copy(buffer, *bufferSize, 0);
-    buffer[*bufferSize] = '\0';
-    return 0;
-}
 
-IncFsControl IncFs_Open(const char* dir) {
-    auto control = impl::open(dir);
-    return {control.cmd.release(), control.log.release()};
-}
-IncFsInode IncFs_MakeFile(IncFsControl control, const char* name, IncFsInode parent, IncFsSize size,
-                          const char metadata[], size_t metadataSize, int32_t mode) {
-    return impl::makeFile(control.cmdFd, name, parent, size,
-                          std::string_view(metadata, metadataSize), mode);
-}
-IncFsInode IncFs_MakeDir(IncFsControl control, const char* name, IncFsInode parent,
-                         const char metadata[], size_t metadataSize, int32_t mode) {
-    return impl::makeDir(control.cmdFd, name, parent, std::string_view(metadata, metadataSize),
-                         mode);
-}
-
-IncFsErrorCode IncFs_GetMetadata(IncFsControl control, IncFsInode inode, char buffer[],
-                                 size_t* bufferSize) {
-    return impl::getMetadata(control.cmdFd, inode, buffer, bufferSize);
-}
-
-IncFsErrorCode IncFs_Link(IncFsControl control, IncFsInode item, IncFsInode targetParent,
-                          const char* name) {
-    return impl::link(control.cmdFd, item, targetParent, name);
-}
-IncFsErrorCode IncFs_Unlink(IncFsControl control, IncFsInode parent, const char* name) {
-    return impl::unlink(control.cmdFd, parent, name);
-}
-
-IncFsErrorCode IncFs_WaitForPendingReads(IncFsControl control, int32_t timeoutMs,
-                                         IncFsPendingReadInfo buffer[], size_t* bufferSize) {
-    return impl::waitForReads(control.cmdFd, std::chrono::milliseconds(timeoutMs), buffer,
-                              bufferSize);
-}
-
-IncFsErrorCode IncFs_WaitForPageReads(IncFsControl control, int32_t timeoutMs,
-                                      IncFsPageReadInfo buffer[], size_t* bufferSize) {
-    if (control.logFd < 0) {
+    auto [sourceRoot, subpath] = registry().rootAndSubpathFor(sourceDir);
+    if (sourceRoot.empty()) {
         return -EINVAL;
     }
-    return impl::waitForReads(control.logFd, std::chrono::milliseconds(timeoutMs), buffer,
-                              bufferSize);
+    if (subpath.empty()) {
+        LOG(WARNING) << "[incfs] Binding the root mount '" << sourceRoot << "' is not allowed";
+        return -EINVAL;
+    }
+
+    if (auto err = isValidMountTarget(targetDir); err != 0) {
+        return err;
+    }
+
+    if (::mount(sourceDir, targetDir, nullptr, MS_BIND, nullptr)) {
+        PLOG(ERROR) << "[incfs] Failed to bind mount '" << sourceDir << "' to '" << targetDir
+                    << '\'';
+        return -errno;
+    }
+    registry().addBind(sourceDir, targetDir);
+    return 0;
 }
 
-IncFsErrorCode IncFs_WriteBlocks(IncFsControl control, const incfs_new_data_block blocks[],
-                                 size_t blocksCount) {
-    return impl::writeBlocks(control.cmdFd, blocks, blocksCount);
+IncFsErrorCode IncFs_Unmount(const char* dir) {
+    if (!enabled()) {
+        return -ENOTSUP;
+    }
+
+    registry().removeBind(dir);
+    errno = 0;
+    if (::umount2(dir, MNT_FORCE) == 0 || errno == EINVAL || errno == ENOENT) {
+        // EINVAL - not a mount point, ENOENT - doesn't exist at all
+        return -errno;
+    }
+    PLOG(WARNING) << __func__ << ": umount(force) failed, detaching '" << dir << '\'';
+    errno = 0;
+    if (!::umount2(dir, MNT_DETACH)) {
+        return 0;
+    }
+    PLOG(WARNING) << __func__ << ": umount(detach) returned non-zero for '" << dir << '\'';
+    return 0;
+}
+
+bool IncFs_IsIncFsPath(const char* path) {
+    return isIncFsPath(path);
 }

@@ -21,55 +21,86 @@
 #include <sys/select.h>
 #include <unistd.h>
 
+#include <optional>
 #include <thread>
 
 #include "incfs.h"
+#include "path.h"
 
 using namespace android::incfs;
+using namespace std::literals;
 
 static bool exists(std::string_view path) {
     return access(path.data(), F_OK) == 0;
 }
 
+struct ScopedUnmount {
+    std::string path_;
+    explicit ScopedUnmount(std::string&& path) : path_(std::move(path)) {}
+    ~ScopedUnmount() { unmount(path_); }
+};
+
 class IncFsTest : public ::testing::Test {
 protected:
     virtual void SetUp() {
-        TemporaryDir tmp_dir_for_mount, tmp_dir_for_image;
-        mount_dir_path_ = tmp_dir_for_mount.path;
-        image_dir_path_ = tmp_dir_for_image.path;
-        image_path_ = image_dir_path_ + "/image.img";
+        tmp_dir_for_mount_.emplace();
+        mount_dir_path_ = tmp_dir_for_mount_->path;
+        tmp_dir_for_image_.emplace();
+        image_dir_path_ = tmp_dir_for_image_->path;
+        ASSERT_TRUE(exists(image_dir_path_));
+        ASSERT_TRUE(exists(mount_dir_path_));
         if (!enabled()) {
-            GTEST_SKIP() << "incfs test not supported";
+            GTEST_SKIP() << "test not supported: IncFS is not enabled";
         } else {
-            control_ = mount(image_path_, mount_dir_path_, 0, kDefaultReadTimeout);
-            ASSERT_TRUE(control_.cmdFd >= 0);
-            ASSERT_TRUE(control_.logFd >= 0);
-            tmp_dir_for_mount.DoNotRemove();
-            tmp_dir_for_image.DoNotRemove();
+            control_ =
+                    mount(image_dir_path_, mount_dir_path_,
+                          MountOptions{.readLogBufferPages = 4,
+                                       .defaultReadTimeoutMs = std::chrono::duration_cast<
+                                                                       std::chrono::milliseconds>(
+                                                                       kDefaultReadTimeout)
+                                                                       .count()});
+            ASSERT_TRUE(control_.cmd >= 0) << "Expected >= 0 got " << control_.cmd;
+            ASSERT_TRUE(control_.pendingReads >= 0);
+            ASSERT_TRUE(control_.logs >= 0);
         }
     }
     virtual void TearDown() {
-        if (control_.cmdFd >= 0) {
-            unmount(mount_dir_path_);
-        }
-        android::base::RemoveFileIfExists(image_path_, nullptr);
-        ::rmdir(image_dir_path_.c_str());
-        ::rmdir(mount_dir_path_.c_str());
-        ASSERT_FALSE(exists(image_dir_path_));
-        ASSERT_FALSE(exists(mount_dir_path_));
+        control_.reset();
+        unmount(mount_dir_path_);
+        tmp_dir_for_image_.reset();
+        tmp_dir_for_mount_.reset();
+        EXPECT_FALSE(exists(image_dir_path_));
+        EXPECT_FALSE(exists(mount_dir_path_));
     }
-    std::string image_path_;
-    std::string image_dir_path_;
+
+    template <class... Paths>
+    std::string mountPath(Paths&&... paths) const {
+        return path::join(mount_dir_path_, std::forward<Paths>(paths)...);
+    }
+
+    static IncFsFileId fileId(uint64_t i) {
+        IncFsFileId id = {};
+        static_assert(sizeof(id) >= sizeof(i));
+        memcpy(&id, &i, sizeof(i));
+        return id;
+    }
+
+    static IncFsSpan metadata(std::string_view sv) {
+        return {.data = sv.data(), .size = IncFsSize(sv.size())};
+    }
+
     std::string mount_dir_path_;
-    const std::string test_file_name_ = "test.txt";
-    const std::string test_dir_name_ = "test_dir";
-    const int test_file_size_ = INCFS_DATA_FILE_BLOCK_SIZE;
-    IncFsControl control_;
+    std::optional<TemporaryDir> tmp_dir_for_mount_;
+    std::string image_dir_path_;
+    std::optional<TemporaryDir> tmp_dir_for_image_;
+    inline static const std::string_view test_file_name_ = "test.txt"sv;
+    inline static const std::string_view test_dir_name_ = "test_dir"sv;
+    inline static const int test_file_size_ = INCFS_DATA_FILE_BLOCK_SIZE;
+    UniqueControl control_;
 };
 
-TEST_F(IncFsTest, GetIncfsVersion) {
-    // if incfs is enabled, version should be >= 0.
-    ASSERT_GE(version(), 0);
+TEST_F(IncFsTest, GetIncfsFeatures) {
+    ASSERT_NE(features(), none);
 }
 
 TEST_F(IncFsTest, FalseIncfsPath) {
@@ -83,140 +114,193 @@ TEST_F(IncFsTest, TrueIncfsPath) {
 
 TEST_F(IncFsTest, TrueIncfsPathForBindMount) {
     TemporaryDir tmp_dir_to_bind;
-    ASSERT_EQ(0, bindMount(mount_dir_path_, tmp_dir_to_bind.path));
+    ASSERT_EQ(0, makeDir(control_, mountPath(test_dir_name_)));
+    ASSERT_EQ(0, bindMount(mountPath(test_dir_name_), tmp_dir_to_bind.path));
+    ScopedUnmount su(tmp_dir_to_bind.path);
     ASSERT_TRUE(isIncFsPath(tmp_dir_to_bind.path));
 }
 
+TEST_F(IncFsTest, MakeDir) {
+    const auto dir_path = mountPath(test_dir_name_);
+    ASSERT_FALSE(exists(dir_path));
+    ASSERT_GE(makeDir(control_, dir_path), 0);
+    ASSERT_TRUE(exists(dir_path));
+}
+
 TEST_F(IncFsTest, BindMount) {
-    TemporaryDir tmp_dir_to_bind;
-    ASSERT_EQ(0, bindMount(mount_dir_path_, tmp_dir_to_bind.path));
-    ASSERT_TRUE(makeFile(control_, test_file_name_, INCFS_ROOT_INODE, test_file_size_, {}) > 0);
-    const auto file_binded_path = std::string(tmp_dir_to_bind.path) + "/" + test_file_name_;
-    ASSERT_TRUE(exists(file_binded_path.c_str()));
+    {
+        TemporaryDir tmp_dir_to_bind;
+        ASSERT_EQ(0, makeDir(control_, mountPath(test_dir_name_)));
+        ASSERT_EQ(0, bindMount(mountPath(test_dir_name_), tmp_dir_to_bind.path));
+        ScopedUnmount su(tmp_dir_to_bind.path);
+        const auto test_file = mountPath(test_dir_name_, test_file_name_);
+        ASSERT_FALSE(exists(test_file.c_str())) << "Present: " << test_file;
+        ASSERT_EQ(0,
+                  makeFile(control_, test_file, 0555, fileId(1),
+                           {.size = test_file_size_, .metadata = metadata("md")}));
+        ASSERT_TRUE(exists(test_file.c_str())) << "Missing: " << test_file;
+        const auto file_binded_path = path::join(tmp_dir_to_bind.path, test_file_name_);
+        ASSERT_TRUE(exists(file_binded_path.c_str())) << "Missing: " << file_binded_path;
+    }
+
+    {
+        // Don't allow binding the root
+        TemporaryDir tmp_dir_to_bind;
+        ASSERT_EQ(-EINVAL, bindMount(mount_dir_path_, tmp_dir_to_bind.path));
+    }
 }
 
 TEST_F(IncFsTest, Root) {
-    ASSERT_EQ(mount_dir_path_, root(control_));
+    ASSERT_EQ(mount_dir_path_, root(control_)) << "Error: " << errno;
 }
 
 TEST_F(IncFsTest, Open) {
     IncFsControl control = open(mount_dir_path_);
-    ASSERT_TRUE(control.cmdFd >= 0);
-    ASSERT_TRUE(control.logFd >= 0);
+    ASSERT_TRUE(control.cmd >= 0);
+    ASSERT_TRUE(control.pendingReads >= 0);
+    ASSERT_TRUE(control.logs >= 0);
 }
 
 TEST_F(IncFsTest, OpenFail) {
     TemporaryDir tmp_dir_to_bind;
     IncFsControl control = open(tmp_dir_to_bind.path);
-    ASSERT_TRUE(control.cmdFd < 0);
-    ASSERT_TRUE(control.logFd < 0);
-}
-
-TEST_F(IncFsTest, MakeDir) {
-    const auto dir_path = mount_dir_path_ + "/" + test_dir_name_;
-    ASSERT_FALSE(exists(dir_path));
-    ASSERT_TRUE(makeDir(control_, test_dir_name_, INCFS_ROOT_INODE, {}) > 0);
-    ASSERT_TRUE(exists(dir_path));
+    ASSERT_TRUE(control.cmd < 0);
+    ASSERT_TRUE(control.pendingReads < 0);
+    ASSERT_TRUE(control.logs < 0);
 }
 
 TEST_F(IncFsTest, MakeFile) {
-    const int dir_ino = makeDir(control_, test_dir_name_, INCFS_ROOT_INODE, {});
-    ASSERT_TRUE(dir_ino > 0);
-    const auto file_path = mount_dir_path_ + "/" + test_dir_name_ + "/" + test_file_name_;
+    ASSERT_EQ(0, makeDir(control_, mountPath(test_dir_name_)));
+    const auto file_path = mountPath(test_dir_name_, test_file_name_);
     ASSERT_FALSE(exists(file_path));
-    ASSERT_TRUE(makeFile(control_, test_file_name_, dir_ino, test_file_size_, {}) > 0);
+    ASSERT_EQ(0,
+              makeFile(control_, file_path, 0111, fileId(1),
+                       {.size = test_file_size_, .metadata = metadata("md")}));
     struct stat s;
-    ASSERT_EQ(0, stat(file_path.data(), &s));
+    ASSERT_EQ(0, stat(file_path.c_str(), &s));
     ASSERT_EQ(test_file_size_, (int)s.st_size);
 }
 
+TEST_F(IncFsTest, MakeFile0) {
+    ASSERT_EQ(0, makeDir(control_, mountPath(test_dir_name_)));
+    const auto file_path = mountPath(test_dir_name_, ".info");
+    ASSERT_FALSE(exists(file_path));
+    ASSERT_EQ(0,
+              makeFile(control_, file_path, 0555, fileId(1),
+                       {.size = 0, .metadata = metadata("mdsdfhjasdkfas l;jflaskdjf")}));
+    struct stat s;
+    ASSERT_EQ(0, stat(file_path.c_str(), &s));
+    ASSERT_EQ(0, (int)s.st_size);
+}
+
+TEST_F(IncFsTest, GetFileId) {
+    auto id = fileId(1);
+    ASSERT_EQ(0,
+              makeFile(control_, mountPath(test_file_name_), 0555, id,
+                       {.size = test_file_size_, .metadata = metadata("md")}));
+    EXPECT_EQ(id, getFileId(control_, mountPath(test_file_name_))) << "errno = " << errno;
+    EXPECT_EQ(kIncFsInvalidFileId, getFileId(control_, test_file_name_));
+    EXPECT_EQ(kIncFsInvalidFileId, getFileId(control_, "asdf"));
+    EXPECT_EQ(kIncFsInvalidFileId, getFileId({}, mountPath(test_file_name_)));
+}
+
 TEST_F(IncFsTest, GetMetaData) {
-    const std::string metadata = "abc";
-    const int file_ino =
-            makeFile(control_, test_file_name_, INCFS_ROOT_INODE, test_file_size_, metadata);
-    const auto raw_metadata = getMetadata(control_, file_ino);
-    const std::string result(raw_metadata.begin(), raw_metadata.end());
-    ASSERT_EQ(metadata, result);
+    const std::string_view md = "abc"sv;
+    ASSERT_EQ(0,
+              makeFile(control_, mountPath(test_file_name_), 0555, fileId(1),
+                       {.size = test_file_size_, .metadata = metadata(md)}));
+    {
+        const auto raw_metadata = getMetadata(control_, mountPath(test_file_name_));
+        ASSERT_NE(0u, raw_metadata.size()) << errno;
+        const std::string result(raw_metadata.begin(), raw_metadata.end());
+        ASSERT_EQ(md, result);
+    }
+    {
+        const auto raw_metadata = getMetadata(control_, fileId(1));
+        ASSERT_NE(0u, raw_metadata.size()) << errno;
+        const std::string result(raw_metadata.begin(), raw_metadata.end());
+        ASSERT_EQ(md, result);
+    }
 }
 
 TEST_F(IncFsTest, LinkAndUnlink) {
-    const int file_ino = makeFile(control_, test_file_name_, INCFS_ROOT_INODE, test_file_size_, {});
-    const int dir_ino = makeDir(control_, test_dir_name_, INCFS_ROOT_INODE, {});
-    const std::string test_file = "test1.txt";
-    const auto linked_file_path = mount_dir_path_ + "/" + test_dir_name_ + "/" + test_file;
+    ASSERT_EQ(0, makeFile(control_, mountPath(test_file_name_), 0555, fileId(1), {.size = 0}));
+    ASSERT_EQ(0, makeDir(control_, mountPath(test_dir_name_)));
+    const std::string_view test_file = "test1.txt"sv;
+    const auto linked_file_path = mountPath(test_dir_name_, test_file);
     ASSERT_FALSE(exists(linked_file_path));
-    ASSERT_EQ(0, link(control_, file_ino, dir_ino, test_file));
+    ASSERT_EQ(0, link(control_, mountPath(test_file_name_), linked_file_path));
     ASSERT_TRUE(exists(linked_file_path));
-    ASSERT_EQ(0, unlink(control_, dir_ino, test_file));
+    ASSERT_EQ(0, unlink(control_, linked_file_path));
     ASSERT_FALSE(exists(linked_file_path));
 }
 
 TEST_F(IncFsTest, WriteBlocksAndPageRead) {
-    ASSERT_TRUE(control_.logFd > 0);
-    const int file_ino = makeFile(control_, test_file_name_, INCFS_ROOT_INODE, test_file_size_, {});
-    std::vector<uint8_t> data(INCFS_DATA_FILE_BLOCK_SIZE);
-    const auto inst = incfs_new_data_block{.file_ino = static_cast<uint64_t>(file_ino),
-                                           .block_index = static_cast<uint32_t>(0),
-                                           .data_len = static_cast<uint32_t>(data.size()),
-                                           .data = reinterpret_cast<uint64_t>(data.data()),
-                                           .compression = static_cast<uint8_t>(COMPRESSION_NONE)};
-    ASSERT_TRUE(writeBlocks(control_, &inst, 1) > 0);
+    const auto id = fileId(1);
+    ASSERT_TRUE(control_.logs >= 0);
+    ASSERT_EQ(0,
+              makeFile(control_, mountPath(test_file_name_), 0555, id, {.size = test_file_size_}));
+    auto fd = openWrite(control_, fileId(1));
+    ASSERT_GE(fd.get(), 0);
+
+    std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
+    auto block = DataBlock{
+            .fileFd = fd,
+            .pageIndex = 0,
+            .compression = INCFS_COMPRESSION_KIND_NONE,
+            .dataSize = (uint32_t)data.size(),
+            .data = data.data(),
+    };
+    ASSERT_EQ(1, writeBlocks({&block, 1}));
 
     std::thread wait_page_read_thread([&]() {
-        std::vector<PageReadInfo> reads;
-        int count_to_timeout = 0;
-        while (true) {
-            if (WaitResult::HaveData ==
-                waitForPageReads(control_, std::chrono::milliseconds(0), &reads)) {
-                break;
-            }
-            sleep(1);
-            count_to_timeout++;
-            if (count_to_timeout == 5) {
-                break;
-            }
-        }
+        std::vector<ReadInfo> reads;
+        ASSERT_EQ(WaitResult::HaveData,
+                  waitForPageReads(control_, std::chrono::seconds(5), &reads));
         ASSERT_FALSE(reads.empty());
-        ASSERT_EQ(file_ino, static_cast<int>(reads[0].file_ino));
-        ASSERT_EQ(0, static_cast<int>(reads[0].block_index));
+        ASSERT_EQ(0, memcmp(&id, &reads[0].id, sizeof(id)));
+        ASSERT_EQ(0, int(reads[0].block));
     });
 
-    const auto file_path = mount_dir_path_ + "/" + test_file_name_;
-    const android::base::unique_fd fd(open(file_path.c_str(), O_RDONLY | O_CLOEXEC | O_BINARY));
-    ASSERT_TRUE(fd >= 0);
+    const auto file_path = mountPath(test_file_name_);
+    const android::base::unique_fd readFd(open(file_path.c_str(), O_RDONLY | O_CLOEXEC | O_BINARY));
+    ASSERT_TRUE(readFd >= 0);
     char buf[INCFS_DATA_FILE_BLOCK_SIZE];
-    ASSERT_TRUE(android::base::ReadFully(fd, buf, sizeof(buf)));
+    ASSERT_TRUE(android::base::ReadFully(readFd, buf, sizeof(buf)));
     wait_page_read_thread.join();
 }
 
 TEST_F(IncFsTest, WaitForPendingReads) {
-    ASSERT_TRUE(control_.cmdFd > 0);
-    const int file_ino = makeFile(control_, test_file_name_, INCFS_ROOT_INODE, test_file_size_, {});
-    ASSERT_TRUE(file_ino >= 0);
+    const auto id = fileId(1);
+    ASSERT_EQ(0,
+              makeFile(control_, mountPath(test_file_name_), 0555, id, {.size = test_file_size_}));
 
     std::thread wait_pending_read_thread([&]() {
-        std::vector<PendingReadInfo> pending_reads;
-        int count_to_timeout = 0;
-        while (true) {
-            if (WaitResult::HaveData ==
-                waitForPendingReads(control_, std::chrono::milliseconds(0), &pending_reads)) {
-                break;
-            }
-            sleep(1);
-            count_to_timeout++;
-            if (count_to_timeout == 5) {
-                break;
-            }
-        }
-        ASSERT_FALSE(pending_reads.empty());
-        ASSERT_EQ(file_ino, static_cast<int>(pending_reads[0].file_ino));
-        ASSERT_EQ(0, static_cast<int>(pending_reads[0].block_index));
+        std::vector<ReadInfo> pending_reads;
+        ASSERT_EQ(WaitResult::HaveData,
+                  waitForPendingReads(control_, std::chrono::seconds(10), &pending_reads));
+        ASSERT_GT(pending_reads.size(), 0u);
+        ASSERT_EQ(0, memcmp(&id, &pending_reads[0].id, sizeof(id)));
+        ASSERT_EQ(0, (int)pending_reads[0].block);
+
+        auto fd = openWrite(control_, fileId(1));
+        ASSERT_GE(fd.get(), 0);
+
+        std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
+        auto block = DataBlock{
+                .fileFd = fd,
+                .pageIndex = 0,
+                .compression = INCFS_COMPRESSION_KIND_NONE,
+                .dataSize = (uint32_t)data.size(),
+                .data = data.data(),
+        };
+        ASSERT_EQ(1, writeBlocks({&block, 1}));
     });
 
-    const auto file_path = mount_dir_path_ + "/" + test_file_name_;
+    const auto file_path = mountPath(test_file_name_);
     const android::base::unique_fd fd(open(file_path.c_str(), O_RDONLY | O_CLOEXEC | O_BINARY));
-    ASSERT_TRUE(fd >= 0);
+    ASSERT_GE(fd.get(), 0);
     char buf[INCFS_DATA_FILE_BLOCK_SIZE];
-    ASSERT_FALSE(android::base::ReadFully(fd, buf, sizeof(buf)));
+    ASSERT_TRUE(android::base::ReadFully(fd, buf, sizeof(buf)));
     wait_pending_read_thread.join();
 }

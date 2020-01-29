@@ -15,6 +15,7 @@
  */
 
 #include "MountRegistry.h"
+
 #include "incfs.h"
 #include "path.h"
 #include "split.h"
@@ -76,10 +77,25 @@ std::string_view MountRegistry::rootFor(std::string_view path) const {
     return mRoots[index];
 }
 
+std::pair<std::string_view, std::string> MountRegistry::rootAndSubpathFor(
+        std::string_view path) const {
+    auto normalPath = path::normalize(path);
+    auto [index, bindIt] = rootIndex(normalPath);
+    if (index < 0) {
+        return {};
+    }
+
+    const auto& subdir = bindIt->second.first;
+    const auto& root = mRoots[index];
+    const auto fullBindDir = path::join(root, subdir);
+    auto pathSubpath = path::relativize(fullBindDir, normalPath);
+    return {std::string_view(root), std::string(std::move(pathSubpath))};
+}
+
 void MountRegistry::addRoot(std::string_view root) {
     const auto index = mRoots.size();
     auto absolute = path::normalize(root);
-    auto it = mRootByBindPoint.insert_or_assign(absolute, index).first;
+    auto it = mRootByBindPoint.insert_or_assign(absolute, std::pair{std::string(), index}).first;
     mRootBinds.push_back({it});
     mRoots.emplace_back(std::move(absolute));
 }
@@ -91,7 +107,7 @@ void MountRegistry::removeRoot(std::string_view root) {
         LOG(WARNING) << "[incfs] Trying to remove non-existent root '" << root << '\'';
         return;
     }
-    const auto index = it->second;
+    const auto index = it->second.second;
     if (index >= int(mRoots.size())) {
         LOG(ERROR) << "[incfs] Root '" << root << "' has index " << index
                    << " out of bounds (total roots count is " << mRoots.size();
@@ -117,31 +133,50 @@ void MountRegistry::removeRoot(std::string_view root) {
 }
 
 void MountRegistry::addBind(std::string_view what, std::string_view where) {
-    auto [root, _] = rootIndex(path::normalize(what));
+    auto whatAbsolute = path::normalize(what);
+    auto [root, rootIt] = rootIndex(whatAbsolute);
     if (root < 0) {
         LOG(ERROR) << "[incfs] No root found for bind from " << what << " to " << where;
         return;
     }
-    auto it = mRootByBindPoint.insert_or_assign(path::normalize(where), root).first;
+
+    const auto& currentBind = rootIt->first;
+    auto whatSubpath = path::relativize(currentBind, whatAbsolute);
+    const auto& subdir = rootIt->second.first;
+    auto realSubdir = path::join(subdir, whatSubpath);
+    auto it = mRootByBindPoint
+                      .insert_or_assign(path::normalize(where),
+                                        std::pair{std::move(realSubdir), root})
+                      .first;
     mRootBinds[root].push_back(it);
 }
 
 void MountRegistry::moveBind(std::string_view src, std::string_view dest) {
-    auto [root, rootIt] = rootIndex(path::normalize(src));
+    auto srcAbsolute = path::normalize(src);
+    auto destAbsolute = path::normalize(dest);
+    if (srcAbsolute == destAbsolute) {
+        return;
+    }
+
+    auto [root, rootIt] = rootIndex(srcAbsolute);
     if (root < 0) {
         LOG(ERROR) << "[incfs] No root found for bind move from " << src << " to " << dest;
         return;
     }
 
-    mRootByBindPoint.erase(rootIt);
-    auto destAbsolute = path::normalize(dest);
-    rootIt = mRootByBindPoint.insert_or_assign(destAbsolute, root).first;
-    auto bindIt = std::find(mRootBinds[root].begin(), mRootBinds[root].end(), rootIt);
-    *bindIt = rootIt;
-    if (mRoots[root] == src) {
+    if (mRoots[root] == srcAbsolute) {
         // moving the whole root
-        mRoots[root] = std::move(destAbsolute);
+        mRoots[root] = destAbsolute;
     }
+
+    const auto newRootIt =
+            mRootByBindPoint
+                    .insert_or_assign(std::move(destAbsolute),
+                                      std::pair{std::move(rootIt->second.first), root})
+                    .first;
+    mRootByBindPoint.erase(rootIt);
+    const auto bindIt = std::find(mRootBinds[root].begin(), mRootBinds[root].end(), rootIt);
+    *bindIt = newRootIt;
 }
 
 void MountRegistry::removeBind(std::string_view what) {
@@ -174,12 +209,13 @@ void MountRegistry::load() {
 
     struct MountInfo {
         std::string root;
-        std::vector<std::string> bindPoints;
+        std::vector<std::pair<std::string, std::string>> bindPoints;
     };
     std::unordered_map<std::string, MountInfo> mountsByGroup;
 
+    std::vector<std::string_view> items;
     while (getline(in, line)) {
-        auto items = Split(line, ' ');
+        Split(line, ' ', &items);
         if (items.size() < 10) {
             LOG(WARNING) << "[incfs] bad line in mountinfo: |" << line << '|';
             continue;
@@ -189,22 +225,33 @@ void MountRegistry::load() {
             continue;
         }
         const auto groupId = items[2];
-        const auto subdir = items[3];
+        auto subdir = items[3];
         auto mountPoint = std::string(items[4]);
         fixProcPath(mountPoint);
+        mountPoint = path::normalize(mountPoint);
         auto& mount = mountsByGroup[std::string(groupId)];
         if (subdir == "/"sv) {
-            mount.root.assign(mountPoint);
+            if (mount.root.empty()) {
+                mount.root.assign(mountPoint);
+            } else {
+                LOG(WARNING) << "[incfs] incfs root '" << mount.root
+                             << "' mounted in multiple places, ignoring later mount '" << mountPoint
+                             << '\'';
+            }
+            subdir = ""sv;
         }
-        mount.bindPoints.emplace_back(std::move(mountPoint));
+        mount.bindPoints.emplace_back(std::string(subdir), std::move(mountPoint));
     }
 
     for (auto& [group, mount] : mountsByGroup) {
         const auto index = mRoots.size();
         std::vector<BindMap::const_iterator> binds;
         binds.reserve(mount.bindPoints.size());
-        for (auto& bind : mount.bindPoints) {
-            auto it = mRootByBindPoint.insert_or_assign(std::move(bind), index).first;
+        for (auto& [subdir, bind] : mount.bindPoints) {
+            auto it =
+                    mRootByBindPoint
+                            .insert_or_assign(std::move(bind), std::pair(std::move(subdir), index))
+                            .first;
             binds.push_back(it);
         }
         mRoots.emplace_back(std::move(mount.root));
@@ -218,7 +265,8 @@ void MountRegistry::load() {
         for (auto&& root : mRoots) {
             LOG(INFO) << "[incfs]    '" << root << '\'';
             for (auto&& bind : mRootBinds[index]) {
-                LOG(INFO) << "[incfs]      : '" << bind->first << '\'';
+                LOG(INFO) << "[incfs]      : '" << bind->second.first << "' -> '" << bind->first
+                          << '\'';
             }
             ++index;
         }
@@ -227,15 +275,27 @@ void MountRegistry::load() {
 
 std::pair<int, MountRegistry::BindMap::const_iterator> MountRegistry::rootIndex(
         std::string_view path) const {
+    auto res = rootIndexImpl(path);
+    if (res.first == -1) {
+        // If we can't find a root there's a chance some other process
+        // has modified a mount - let's reload and try again.
+        // TODO(148432149): add thread safety before someone calls it in different threads.
+        const_cast<MountRegistry*>(this)->reload();
+        res = rootIndexImpl(path);
+    }
+    return res;
+}
+
+std::pair<int, MountRegistry::BindMap::const_iterator> MountRegistry::rootIndexImpl(
+        std::string_view path) const {
     auto it = mRootByBindPoint.lower_bound(path);
     if (it != mRootByBindPoint.end() && it->first == path) {
-        return {it->second, it};
+        return {it->second.second, it};
     }
     if (it != mRootByBindPoint.begin()) {
         --it;
-        if (base::StartsWith(path, it->first) && path.size() > it->first.size() &&
-            path[it->first.size()] == '/') {
-            const auto index = it->second;
+        if (path::startsWith(path, it->first) && path.size() > it->first.size()) {
+            const auto index = it->second.second;
             if (index >= int(mRoots.size()) || mRoots[index].empty()) {
                 LOG(ERROR) << "[incfs] Root for path '" << path << "' #" << index
                            << " is not valid";

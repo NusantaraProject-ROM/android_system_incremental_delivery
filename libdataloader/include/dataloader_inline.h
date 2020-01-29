@@ -37,13 +37,12 @@ struct DataLoaderImpl : public ::DataLoader {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPrepareImage(addedFiles,
                                                                                    removedFiles);
         };
-        onPendingReads = [](DataLoader* self, const IncFsPendingReadInfo pendingReads[],
+        onPendingReads = [](DataLoader* self, const IncFsReadInfo pendingReads[],
                             int pendingReadsCount) {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPendingReads(
                     PendingReads(pendingReads, pendingReadsCount));
         };
-        onPageReads = [](DataLoader* self, const IncFsPageReadInfo pageReads[],
-                         int pageReadsCount) {
+        onPageReads = [](DataLoader* self, const IncFsReadInfo pageReads[], int pageReadsCount) {
             return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPageReads(
                     PageReads(pageReads, pageReadsCount));
         };
@@ -108,14 +107,18 @@ inline DataLoaderParams::DataLoaderParams(int type, std::string&& packageName,
         mArguments(std::move(arguments)),
         mDynamicArgs(std::move(dynamicArgs)) {}
 
-inline int FilesystemConnector::writeBlocks(const incfs_new_data_block blocks[], int blocksCount) {
-    return DataLoader_FilesystemConnector_writeBlocks(this, blocks, blocksCount);
+inline int FilesystemConnector::openWrite(FileId fid) {
+    return DataLoader_FilesystemConnector_openWrite(this, fid);
 }
 
-inline RawMetadata FilesystemConnector::getRawMetadata(Inode ino) {
+inline int FilesystemConnector::writeBlocks(DataBlocks blocks) {
+    return DataLoader_FilesystemConnector_writeBlocks(this, blocks.data(), blocks.size());
+}
+
+inline RawMetadata FilesystemConnector::getRawMetadata(FileId fid) {
     RawMetadata metadata(INCFS_MAX_FILE_ATTR_SIZE);
     size_t size = metadata.size();
-    if (DataLoader_FilesystemConnector_getRawMetadata(this, ino, metadata.data(), &size) < 0) {
+    if (DataLoader_FilesystemConnector_getRawMetadata(this, fid, metadata.data(), &size) < 0) {
         return {};
     }
     metadata.resize(size);
