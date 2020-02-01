@@ -56,6 +56,7 @@ cc_test {
     ],
     srcs: [
         "tests/incfs_test.cpp",
+        "tests/MountRegistry_test.cpp",
     ],
     require_root: true,
 }
