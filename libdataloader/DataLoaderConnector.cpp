@@ -330,7 +330,7 @@ public:
                                    offsetBytes, lengthBytes, incomingFd);
     }
 
-    int openWrite(FileId fid) const { return android::incfs::openWrite(mControl, fid); }
+    int openWrite(FileId fid) const { return android::incfs::openWrite(mControl, fid).release(); }
 
     int writeBlocks(std::span<const IncFsDataBlock> blocks) const {
         return android::incfs::writeBlocks(blocks);
