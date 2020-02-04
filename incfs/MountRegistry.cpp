@@ -85,11 +85,10 @@ std::pair<std::string_view, std::string> MountRegistry::rootAndSubpathFor(
         return {};
     }
 
-    const auto& subdir = bindIt->second.first;
+    const auto& bindSubdir = bindIt->second.first;
+    const auto pastBindSubdir = path::relativize(bindIt->first, normalPath);
     const auto& root = mRoots[index];
-    const auto fullBindDir = path::join(root, subdir);
-    auto pathSubpath = path::relativize(fullBindDir, normalPath);
-    return {std::string_view(root), std::string(std::move(pathSubpath))};
+    return {std::string_view(root), path::join(bindSubdir, pastBindSubdir)};
 }
 
 void MountRegistry::addRoot(std::string_view root) {
