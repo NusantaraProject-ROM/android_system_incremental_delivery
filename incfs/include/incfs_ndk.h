@@ -140,6 +140,7 @@ bool IncFs_IsEnabled();
 IncFsFeatures IncFs_Features();
 
 bool IncFs_IsIncFsPath(const char* path);
+
 static inline bool IncFs_IsValidFileId(IncFsFileId fileId) {
     return memcmp(&fileId, &kIncFsInvalidFileId, sizeof(fileId)) != 0;
 }
@@ -171,6 +172,7 @@ IncFsErrorCode IncFs_GetSignatureById(IncFsControl control, IncFsFileId id, char
                                       size_t* bufferSize);
 IncFsErrorCode IncFs_GetSignatureByPath(IncFsControl control, const char* path, char buffer[],
                                         size_t* bufferSize);
+IncFsErrorCode IncFs_UnsafeGetSignatureByPath(const char* path, char buffer[], size_t* bufferSize);
 
 IncFsFileId IncFs_GetId(IncFsControl control, const char* path);
 
