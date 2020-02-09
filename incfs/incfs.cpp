@@ -610,6 +610,10 @@ IncFsErrorCode IncFs_GetSignatureByPath(IncFsControl control, const char* path, 
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
+    return IncFs_UnsafeGetSignatureByPath(path, buffer, bufferSize);
+}
+
+IncFsErrorCode IncFs_UnsafeGetSignatureByPath(const char* path, char buffer[], size_t* bufferSize) {
     auto fd = openRaw(path);
     if (fd < 0) {
         return fd.get();
