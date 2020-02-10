@@ -34,6 +34,18 @@ typedef enum {
     DATA_LOADER_LAST_STATUS = DATA_LOADER_CONNECTION_OK,
 } DataLoaderStatus;
 
+typedef enum {
+    DATA_LOADER_TYPE_NONE = 0,
+    DATA_LOADER_TYPE_STREAMING = 1,
+    DATA_LOADER_TYPE_INCREMENTAL = 2,
+} DataLoaderType;
+
+typedef enum {
+    DATA_LOADER_LOCATION_DATA_APP = 0,
+    DATA_LOADER_LOCATION_MEDIA_OBB = 1,
+    DATA_LOADER_LOCATION_MEDIA_DATA = 2,
+} DataLoaderLocation;
+
 typedef struct {
     const char* name;
     int fd;
@@ -48,6 +60,13 @@ struct DataLoaderParams {
     const DataLoaderNamedFd* dynamicArgs;
     int dynamicArgsSize;
 };
+
+typedef struct {
+    int location;
+    const char* name;
+    IncFsSize size;
+    IncFsSpan metadata;
+} DataLoaderInstallationFile;
 
 #ifdef __cplusplus
 
@@ -72,7 +91,8 @@ struct DataLoader {
     void (*onStop)(struct DataLoader* self);
     void (*onDestroy)(struct DataLoader* self);
 
-    bool (*onPrepareImage)(struct DataLoader* self, jobject addedFiles, jobject removedFiles);
+    bool (*onPrepareImage)(struct DataLoader* self, const DataLoaderInstallationFile addedFiles[],
+                           int addedFilesCount);
 
     void (*onPendingReads)(struct DataLoader* self, const IncFsReadInfo pendingReads[],
                            int pendingReadsCount);

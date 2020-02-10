@@ -19,6 +19,8 @@
 
 #include "incfs.h"
 
+#include <android-base/unique_fd.h>
+
 #include <functional>
 #include <memory>
 #include <span>
@@ -31,6 +33,7 @@ using DataLoaderStatus = ::DataLoaderStatus;
 
 struct DataLoader;
 struct DataLoaderParams;
+struct DataLoaderInstallationFile;
 struct FilesystemConnector;
 struct StatusListener;
 
@@ -44,6 +47,7 @@ using ServiceConnectorPtr = DataLoaderServiceConnectorPtr;
 using ServiceParamsPtr = DataLoaderServiceParamsPtr;
 
 using DataLoaderPtr = std::unique_ptr<DataLoader>;
+using DataLoaderInstallationFiles = std::span<const ::DataLoaderInstallationFile>;
 using PendingReads = std::span<const ReadInfo>;
 using PageReads = std::span<const ReadInfo>;
 using RawMetadata = std::vector<char>;
@@ -52,7 +56,7 @@ using DataBlocks = std::span<const DataBlock>;
 constexpr int kBlockSize = INCFS_DATA_FILE_BLOCK_SIZE;
 
 struct DataLoader {
-    using Factory = std::function<DataLoaderPtr(DataLoaderServiceVmPtr)>;
+    using Factory = std::function<DataLoaderPtr(DataLoaderServiceVmPtr, const DataLoaderParams&)>;
     static void initialize(Factory&& factory);
 
     virtual ~DataLoader() {}
@@ -65,7 +69,7 @@ struct DataLoader {
     virtual void onDestroy() = 0;
 
     // FS callbacks.
-    virtual bool onPrepareImage(jobject addedFiles, jobject removedFiles) { return false; }
+    virtual bool onPrepareImage(const DataLoaderInstallationFiles& addedFiles) = 0;
 
     // IFS callbacks.
     virtual void onPendingReads(const PendingReads& pendingReads) = 0;
@@ -73,7 +77,7 @@ struct DataLoader {
 };
 
 struct DataLoaderParams {
-    int type() const { return mType; }
+    DataLoaderType type() const { return mType; }
     const std::string& packageName() const { return mPackageName; }
     const std::string& className() const { return mClassName; }
     const std::string& arguments() const { return mArguments; }
@@ -84,19 +88,35 @@ struct DataLoaderParams {
     };
     const std::vector<NamedFd>& dynamicArgs() const { return mDynamicArgs; }
 
-    DataLoaderParams(int type, std::string&& packageName, std::string&& className,
+    DataLoaderParams(DataLoaderType type, std::string&& packageName, std::string&& className,
                      std::string&& arguments, std::vector<NamedFd>&& dynamicArgs);
 
 private:
-    int const mType;
+    DataLoaderType const mType;
     std::string const mPackageName;
     std::string const mClassName;
     std::string const mArguments;
     std::vector<NamedFd> const mDynamicArgs;
 };
 
+struct DataLoaderInstallationFile {
+    DataLoaderLocation location() const { return mLocation; }
+    const std::string& name() const { return mName; }
+    IncFsSize size() const { return mSize; }
+    const RawMetadata& metadata() const { return mMetadata; }
+
+    DataLoaderInstallationFile(DataLoaderLocation location, std::string&& name, IncFsSize size,
+                               RawMetadata&& metadata);
+
+private:
+    DataLoaderLocation const mLocation;
+    std::string const mName;
+    IncFsSize const mSize;
+    RawMetadata const mMetadata;
+};
+
 struct FilesystemConnector : public DataLoaderFilesystemConnector {
-    int openWrite(FileId fid);
+    android::base::unique_fd openWrite(FileId fid);
     int writeBlocks(DataBlocks blocks);
     RawMetadata getRawMetadata(FileId fid);
 };
