@@ -53,7 +53,8 @@ struct JniIds {
                 FindClassOrDie(env, "android/service/dataloader/DataLoaderService");
         dataLoaderServiceOnCreateDataLoader =
                 GetMethodIDOrDie(env, dataLoaderService, "onCreateDataLoader",
-                                 "()Landroid/service/dataloader/DataLoaderService$DataLoader;");
+                                 "(Landroid/content/pm/DataLoaderParams;)Landroid/service/"
+                                 "dataloader/DataLoaderService$DataLoader;");
 
         auto dataLoader =
                 FindClassOrDie(env, "android/service/dataloader/DataLoaderService$DataLoader");
@@ -92,7 +93,7 @@ bool ManagedDataLoader::onCreate(const android::dataloader::DataLoaderParams&,
     jobject ifsc =
             env->NewObject(jni.fileSystemConnector, jni.fileSystemConnectorConstruct, (jlong)ifs);
 
-    auto dataLoader = env->CallObjectMethod(service, jni.dataLoaderServiceOnCreateDataLoader);
+    auto dataLoader = env->CallObjectMethod(service, jni.dataLoaderServiceOnCreateDataLoader, dlp);
     if (!dataLoader) {
         LOG(ERROR) << "Failed to create Java DataLoader.";
         return false;
