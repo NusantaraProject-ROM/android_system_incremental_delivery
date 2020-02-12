@@ -13,6 +13,7 @@ cc_defaults {
         "libbase",
     ],
     shared_libs: [
+        "libcrypto",
         "liblog",
     ],
     target: {

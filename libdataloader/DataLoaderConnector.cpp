@@ -48,6 +48,14 @@ struct JniIds {
         jint DATA_LOADER_SLOW_CONNECTION;
         jint DATA_LOADER_NO_CONNECTION;
         jint DATA_LOADER_CONNECTION_OK;
+
+        jint DATA_LOADER_TYPE_NONE;
+        jint DATA_LOADER_TYPE_STREAMING;
+        jint DATA_LOADER_TYPE_INCREMENTAL;
+
+        jint DATA_LOADER_LOCATION_DATA_APP;
+        jint DATA_LOADER_LOCATION_MEDIA_OBB;
+        jint DATA_LOADER_LOCATION_MEDIA_DATA;
     } constants;
 
     jmethodID parcelFileDescriptorGetFileDescriptor;
@@ -72,6 +80,14 @@ struct JniIds {
     jmethodID listenerOnStatusChanged;
 
     jmethodID callbackControlWriteData;
+
+    jmethodID listGet;
+    jmethodID listSize;
+
+    jmethodID installationFileGetLocation;
+    jmethodID installationFileGetName;
+    jmethodID installationFileGetLengthBytes;
+    jmethodID installationFileGetMetadata;
 
     JniIds(JNIEnv* env) {
         listener = (jclass)env->NewGlobalRef(
@@ -101,6 +117,30 @@ struct JniIds {
         CHECK(constants.DATA_LOADER_SLOW_CONNECTION == DATA_LOADER_SLOW_CONNECTION);
         CHECK(constants.DATA_LOADER_NO_CONNECTION == DATA_LOADER_NO_CONNECTION);
         CHECK(constants.DATA_LOADER_CONNECTION_OK == DATA_LOADER_CONNECTION_OK);
+
+        auto packageInstaller = (jclass)FindClassOrDie(env, "android/content/pm/PackageInstaller");
+
+        constants.DATA_LOADER_TYPE_NONE =
+                GetStaticIntFieldValueOrDie(env, packageInstaller, "DATA_LOADER_TYPE_NONE");
+        constants.DATA_LOADER_TYPE_STREAMING =
+                GetStaticIntFieldValueOrDie(env, packageInstaller, "DATA_LOADER_TYPE_STREAMING");
+        constants.DATA_LOADER_TYPE_INCREMENTAL =
+                GetStaticIntFieldValueOrDie(env, packageInstaller, "DATA_LOADER_TYPE_INCREMENTAL");
+
+        CHECK(constants.DATA_LOADER_TYPE_NONE == DATA_LOADER_TYPE_NONE);
+        CHECK(constants.DATA_LOADER_TYPE_STREAMING == DATA_LOADER_TYPE_STREAMING);
+        CHECK(constants.DATA_LOADER_TYPE_INCREMENTAL == DATA_LOADER_TYPE_INCREMENTAL);
+
+        constants.DATA_LOADER_LOCATION_DATA_APP =
+                GetStaticIntFieldValueOrDie(env, packageInstaller, "LOCATION_DATA_APP");
+        constants.DATA_LOADER_LOCATION_MEDIA_OBB =
+                GetStaticIntFieldValueOrDie(env, packageInstaller, "LOCATION_MEDIA_OBB");
+        constants.DATA_LOADER_LOCATION_MEDIA_DATA =
+                GetStaticIntFieldValueOrDie(env, packageInstaller, "LOCATION_MEDIA_DATA");
+
+        CHECK(constants.DATA_LOADER_LOCATION_DATA_APP == DATA_LOADER_LOCATION_DATA_APP);
+        CHECK(constants.DATA_LOADER_LOCATION_MEDIA_OBB == DATA_LOADER_LOCATION_MEDIA_OBB);
+        CHECK(constants.DATA_LOADER_LOCATION_MEDIA_DATA == DATA_LOADER_LOCATION_MEDIA_DATA);
 
         auto parcelFileDescriptor = FindClassOrDie(env, "android/os/ParcelFileDescriptor");
         parcelFileDescriptorGetFileDescriptor =
@@ -140,6 +180,19 @@ struct JniIds {
         callbackControlWriteData =
                 GetMethodIDOrDie(env, callbackControl, "writeData",
                                  "(Ljava/lang/String;JJLandroid/os/ParcelFileDescriptor;)V");
+
+        auto list = (jclass)FindClassOrDie(env, "java/util/List");
+        listGet = GetMethodIDOrDie(env, list, "get", "(I)Ljava/lang/Object;");
+        listSize = GetMethodIDOrDie(env, list, "size", "()I");
+
+        auto installationFile = (jclass)FindClassOrDie(env, "android/content/pm/InstallationFile");
+        installationFileGetLocation = GetMethodIDOrDie(env, installationFile, "getLocation", "()I");
+        installationFileGetName =
+                GetMethodIDOrDie(env, installationFile, "getName", "()Ljava/lang/String;");
+        installationFileGetLengthBytes =
+                GetMethodIDOrDie(env, installationFile, "getLengthBytes", "()J");
+        installationFileGetMetadata =
+                GetMethodIDOrDie(env, installationFile, "getMetadata", "()[B");
     }
 };
 
@@ -173,12 +226,12 @@ using DataLoaderConnectorsMap = std::unordered_map<int, DataLoaderConnectorPtr>;
 
 struct Globals {
     Globals() {
-        dataLoaderFactory = new details::DataLoaderFactoryImpl(
-                [](auto jvm) { return std::make_unique<ManagedDataLoader>(jvm); });
+        managedDataLoaderFactory = new details::DataLoaderFactoryImpl(
+                [](auto jvm, auto) { return std::make_unique<ManagedDataLoader>(jvm); });
     }
 
-    DataLoaderFactory managedDataLoaderFactory;
-    DataLoaderFactory* dataLoaderFactory;
+    DataLoaderFactory* managedDataLoaderFactory = nullptr;
+    DataLoaderFactory* dataLoaderFactory = nullptr;
 
     std::mutex dataLoaderConnectorsLock;
     // id->DataLoader map
@@ -254,13 +307,28 @@ public:
         close(mControl.logs);
     } // to avoid delete-non-virtual-dtor
 
-    bool onCreate(DataLoaderFactory* factory, const DataLoaderParamsPair& params,
-                  jobject managedParams) {
-        mDataLoader = factory->onCreate(factory, &params.ndkDataLoaderParams(), this, this, mJvm,
-                                        mService, managedParams);
-        if (checkAndClearJavaException(__func__)) {
-            return false;
+    bool onCreate(const DataLoaderParamsPair& params, jobject managedParams) {
+        CHECK(mDataLoader == nullptr);
+
+        if (auto factory = globals().dataLoaderFactory) {
+            // Let's try the non-default first.
+            mDataLoader = factory->onCreate(factory, &params.ndkDataLoaderParams(), this, this,
+                                            mJvm, mService, managedParams);
+            if (checkAndClearJavaException(__func__)) {
+                return false;
+            }
         }
+
+        if (!mDataLoader) {
+            // Didn't work, let's try the default.
+            auto factory = globals().managedDataLoaderFactory;
+            mDataLoader = factory->onCreate(factory, &params.ndkDataLoaderParams(), this, this,
+                                            mJvm, mService, managedParams);
+            if (checkAndClearJavaException(__func__)) {
+                return false;
+            }
+        }
+
         if (!mDataLoader) {
             return false;
         }
@@ -286,9 +354,10 @@ public:
         checkAndClearJavaException(__func__);
     }
 
-    bool onPrepareImage(jobject addedFiles, jobject removedFiles) {
+    bool onPrepareImage(const DataLoaderInstallationFiles& addedFiles) {
         CHECK(mDataLoader);
-        bool result = mDataLoader->onPrepareImage(mDataLoader, addedFiles, removedFiles);
+        bool result =
+                mDataLoader->onPrepareImage(mDataLoader, addedFiles.data(), addedFiles.size());
         if (checkAndClearJavaException(__func__)) {
             result = false;
         }
@@ -442,7 +511,7 @@ DataLoaderParamsPair::DataLoaderParamsPair(android::dataloader::DataLoaderParams
 DataLoaderParamsPair DataLoaderParamsPair::createFromManaged(JNIEnv* env, jobject managedParams) {
     const auto& jni = jniIds(env);
 
-    const int type = env->GetIntField(managedParams, jni.paramsType);
+    const DataLoaderType type = (DataLoaderType)env->GetIntField(managedParams, jni.paramsType);
 
     std::string packageName(
             env->GetStringUTFChars((jstring)env->GetObjectField(managedParams,
@@ -585,7 +654,6 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
 
     auto callbackControl = createCallbackControl(env, control);
 
-    CHECK(globals().dataLoaderFactory) << "Unable to create DataLoader: factory is missing.";
     auto dataLoaderConnector =
             std::make_unique<DataLoaderConnector>(env, service, storageId, nativeControl,
                                                   callbackControl, listener);
@@ -600,7 +668,7 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
                   storageId);
             return false;
         }
-        if (!dlIt->second->onCreate(globals().dataLoaderFactory, nativeParams, params)) {
+        if (!dlIt->second->onCreate(nativeParams, params)) {
             globals().dataLoaderConnectors.erase(dlIt);
             return false;
         }
@@ -754,10 +822,74 @@ bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId) {
     return true;
 }
 
+struct DataLoaderInstallationFilesPair {
+    static DataLoaderInstallationFilesPair createFromManaged(JNIEnv* env, jobject files);
+
+    using Files = std::vector<android::dataloader::DataLoaderInstallationFile>;
+    const Files& files() const { return mFiles; }
+
+    using NDKFiles = std::vector<::DataLoaderInstallationFile>;
+    const NDKFiles& ndkFiles() const { return mNDKFiles; }
+
+private:
+    DataLoaderInstallationFilesPair(Files&& files);
+
+    Files mFiles;
+    NDKFiles mNDKFiles;
+};
+
+DataLoaderInstallationFilesPair DataLoaderInstallationFilesPair::createFromManaged(JNIEnv* env,
+                                                                                   jobject jfiles) {
+    const auto& jni = jniIds(env);
+
+    auto size = env->CallIntMethod(jfiles, jni.listSize);
+    DataLoaderInstallationFilesPair::Files files;
+    files.reserve(size);
+
+    for (int i = 0; i < size; ++i) {
+        jobject jfile = env->CallObjectMethod(jfiles, jni.listGet, i);
+
+        DataLoaderLocation location =
+                (DataLoaderLocation)env->CallIntMethod(jfile, jni.installationFileGetLocation);
+        std::string name =
+                env->GetStringUTFChars((jstring)env->CallObjectMethod(jfile,
+                                                                      jni.installationFileGetName),
+                                       nullptr);
+        IncFsSize size = env->CallLongMethod(jfile, jni.installationFileGetLengthBytes);
+
+        auto jmetadataBytes =
+                (jbyteArray)env->CallObjectMethod(jfile, jni.installationFileGetMetadata);
+        auto metadataElements = env->GetByteArrayElements(jmetadataBytes, nullptr);
+        auto metadataLength = env->GetArrayLength(jmetadataBytes);
+        RawMetadata metadata(metadataElements, metadataElements + metadataLength);
+        env->ReleaseByteArrayElements(jmetadataBytes, metadataElements, 0);
+
+        files.emplace_back(location, std::move(name), size, std::move(metadata));
+    }
+
+    return DataLoaderInstallationFilesPair(std::move(files));
+}
+
+DataLoaderInstallationFilesPair::DataLoaderInstallationFilesPair(Files&& files)
+      : mFiles(std::move(files)) {
+    const auto size = mFiles.size();
+    mNDKFiles.resize(size);
+    for (size_t i = 0; i < size; ++i) {
+        const auto& file = mFiles[i];
+        auto&& ndkFile = mNDKFiles[i];
+
+        ndkFile.location = file.location();
+        ndkFile.name = file.name().c_str();
+        ndkFile.size = file.size();
+        ndkFile.metadata.data = file.metadata().data();
+        ndkFile.metadata.size = file.metadata().size();
+    }
+}
+
 bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobject addedFiles,
                                       jobject removedFiles) {
     jobject listener;
-    bool result;
+    DataLoaderConnectorPtr dataLoaderConnector;
     {
         std::lock_guard lock{globals().dataLoaderConnectorsLock};
         auto dlIt = globals().dataLoaderConnectors.find(storageId);
@@ -766,10 +898,11 @@ bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobject added
             return false;
         }
         listener = dlIt->second->listener();
-
-        auto&& dataLoaderConnector = dlIt->second;
-        result = dataLoaderConnector->onPrepareImage(addedFiles, removedFiles);
+        dataLoaderConnector = dlIt->second;
     }
+
+    auto addedFilesPair = DataLoaderInstallationFilesPair::createFromManaged(env, addedFiles);
+    bool result = dataLoaderConnector->onPrepareImage(addedFilesPair.ndkFiles());
 
     const auto& jni = jniIds(env);
     reportStatusViaCallback(env, listener, storageId,

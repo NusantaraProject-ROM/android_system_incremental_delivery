@@ -29,15 +29,15 @@ private:
                   android::dataloader::FilesystemConnectorPtr ifs,
                   android::dataloader::StatusListenerPtr listener,
                   android::dataloader::ServiceConnectorPtr service,
-                  android::dataloader::ServiceParamsPtr params) override;
-    bool onStart() override { return true; }
-    void onStop() override {}
-    void onDestroy() override;
+                  android::dataloader::ServiceParamsPtr params) final;
+    bool onStart() final { return true; }
+    void onStop() final {}
+    void onDestroy() final;
 
-    bool onPrepareImage(jobject addedFiles, jobject removedFiles) override;
+    bool onPrepareImage(const DataLoaderInstallationFiles& addedFiles) final;
 
-    void onPendingReads(const PendingReads& pendingReads) override {}
-    void onPageReads(const PageReads& pageReads) override {}
+    void onPendingReads(const PendingReads& pendingReads) final {}
+    void onPageReads(const PageReads& pageReads) final {}
 
     JavaVM* const mJvm;
     jobject mDataLoader = nullptr;

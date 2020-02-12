@@ -33,9 +33,10 @@ struct DataLoaderImpl : public ::DataLoader {
             me->mDataLoader->onDestroy();
             delete me;
         };
-        onPrepareImage = [](DataLoader* self, jobject addedFiles, jobject removedFiles) {
-            return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPrepareImage(addedFiles,
-                                                                                   removedFiles);
+        onPrepareImage = [](DataLoader* self, const ::DataLoaderInstallationFile addedFiles[],
+                            int addedFilesCount) -> bool {
+            return static_cast<DataLoaderImpl*>(self)->mDataLoader->onPrepareImage(
+                    DataLoaderInstallationFiles(addedFiles, addedFilesCount));
         };
         onPendingReads = [](DataLoader* self, const IncFsReadInfo pendingReads[],
                             int pendingReadsCount) {
@@ -53,7 +54,7 @@ private:
 };
 
 inline DataLoaderParams createParams(const ::DataLoaderParams* params) {
-    const int type(params->type);
+    const DataLoaderType type((DataLoaderType)params->type);
     std::string packageName(params->packageName);
     std::string className(params->className);
     std::string arguments(params->arguments);
@@ -66,19 +67,27 @@ inline DataLoaderParams createParams(const ::DataLoaderParams* params) {
                             std::move(arguments), std::move(dynamicArgs));
 }
 
+inline DataLoaderInstallationFile createInstallationFile(const ::DataLoaderInstallationFile* file) {
+    const DataLoaderLocation location((DataLoaderLocation)file->location);
+    std::string name(file->name);
+    IncFsSize size(file->size);
+    RawMetadata metadata(file->metadata.data, file->metadata.data + file->metadata.size);
+    return DataLoaderInstallationFile(location, std::move(name), size, std::move(metadata));
+}
+
 struct DataLoaderFactoryImpl : public ::DataLoaderFactory {
     DataLoaderFactoryImpl(DataLoader::Factory&& factory) : mFactory(factory) {
-        onCreate = [](::DataLoaderFactory* self, const ::DataLoaderParams* params,
+        onCreate = [](::DataLoaderFactory* self, const ::DataLoaderParams* ndkParams,
                       ::DataLoaderFilesystemConnectorPtr fsConnector,
                       ::DataLoaderStatusListenerPtr statusListener, ::DataLoaderServiceVmPtr vm,
                       ::DataLoaderServiceConnectorPtr serviceConnector,
                       ::DataLoaderServiceParamsPtr serviceParams) {
             auto me = static_cast<DataLoaderFactoryImpl*>(self);
             ::DataLoader* result = nullptr;
-            auto dataLoader = me->mFactory(vm);
+            auto params = createParams(ndkParams);
+            auto dataLoader = me->mFactory(vm, params);
             if (!dataLoader ||
-                !dataLoader->onCreate(createParams(params),
-                                      static_cast<FilesystemConnector*>(fsConnector),
+                !dataLoader->onCreate(params, static_cast<FilesystemConnector*>(fsConnector),
                                       static_cast<StatusListener*>(statusListener),
                                       serviceConnector, serviceParams)) {
                 return result;
@@ -98,7 +107,7 @@ inline void DataLoader::initialize(DataLoader::Factory&& factory) {
     DataLoader_Initialize(new details::DataLoaderFactoryImpl(std::move(factory)));
 }
 
-inline DataLoaderParams::DataLoaderParams(int type, std::string&& packageName,
+inline DataLoaderParams::DataLoaderParams(DataLoaderType type, std::string&& packageName,
                                           std::string&& className, std::string&& arguments,
                                           std::vector<NamedFd>&& dynamicArgs)
       : mType(type),
@@ -107,8 +116,13 @@ inline DataLoaderParams::DataLoaderParams(int type, std::string&& packageName,
         mArguments(std::move(arguments)),
         mDynamicArgs(std::move(dynamicArgs)) {}
 
-inline int FilesystemConnector::openWrite(FileId fid) {
-    return DataLoader_FilesystemConnector_openWrite(this, fid);
+inline DataLoaderInstallationFile::DataLoaderInstallationFile(DataLoaderLocation location,
+                                                              std::string&& name, IncFsSize size,
+                                                              RawMetadata&& metadata)
+      : mLocation(location), mName(std::move(name)), mSize(size), mMetadata(std::move(metadata)) {}
+
+inline android::base::unique_fd FilesystemConnector::openWrite(FileId fid) {
+    return android::base::unique_fd{DataLoader_FilesystemConnector_openWrite(this, fid)};
 }
 
 inline int FilesystemConnector::writeBlocks(DataBlocks blocks) {

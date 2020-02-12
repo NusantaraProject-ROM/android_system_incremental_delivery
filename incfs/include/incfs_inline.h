@@ -130,9 +130,6 @@ inline ErrorCode makeFile(Control control, std::string_view path, int mode, File
                           NewFileParams params) {
     return IncFs_MakeFile(control, details::c_str(path), mode, fileId, params);
 }
-inline ErrorCode makeFile(Control control, std::string_view path, int mode, NewFileParams params) {
-    return IncFs_MakeFileNoId(control, details::c_str(path), mode, params);
-}
 inline ErrorCode makeDir(Control control, std::string_view path, int mode) {
     return IncFs_MakeDir(control, details::c_str(path), mode);
 }
