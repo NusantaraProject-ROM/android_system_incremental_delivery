@@ -637,6 +637,9 @@ IncFsErrorCode IncFs_GetSignatureByPath(IncFsControl control, const char* path, 
 }
 
 IncFsErrorCode IncFs_UnsafeGetSignatureByPath(const char* path, char buffer[], size_t* bufferSize) {
+    if (!isIncFsPath(path)) {
+        return -EINVAL;
+    }
     auto fd = openRaw(path);
     if (fd < 0) {
         return fd.get();
