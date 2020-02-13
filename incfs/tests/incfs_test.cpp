@@ -14,17 +14,19 @@
  * limitations under the License.
  */
 
+#include "incfs.h"
+
 #include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/unique_fd.h>
 #include <gtest/gtest.h>
+#include <selinux/selinux.h>
 #include <sys/select.h>
 #include <unistd.h>
 
 #include <optional>
 #include <thread>
 
-#include "incfs.h"
 #include "path.h"
 
 using namespace android::incfs;
@@ -62,8 +64,18 @@ protected:
             ASSERT_TRUE(control_.cmd >= 0) << "Expected >= 0 got " << control_.cmd;
             ASSERT_TRUE(control_.pendingReads >= 0);
             ASSERT_TRUE(control_.logs >= 0);
+            checkRestoreconResult(mountPath(".pending_reads"));
+            checkRestoreconResult(mountPath(".log"));
         }
     }
+
+    static void checkRestoreconResult(std::string_view path) {
+        char* ctx = nullptr;
+        ASSERT_NE(-1, getfilecon(path.data(), &ctx));
+        ASSERT_NE("u:object_r:unlabeled:s0", std::string(ctx));
+        freecon(ctx);
+    }
+
     virtual void TearDown() {
         control_.reset();
         unmount(mount_dir_path_);
