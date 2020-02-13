@@ -64,15 +64,15 @@ protected:
             ASSERT_TRUE(control_.cmd >= 0) << "Expected >= 0 got " << control_.cmd;
             ASSERT_TRUE(control_.pendingReads >= 0);
             ASSERT_TRUE(control_.logs >= 0);
-            checkRestoreconResult(mountPath(".pending_reads"));
-            checkRestoreconResult(mountPath(".log"));
+            checkRestoreconResult(mountPath(INCFS_PENDING_READS_FILENAME));
+            checkRestoreconResult(mountPath(INCFS_LOG_FILENAME));
         }
     }
 
     static void checkRestoreconResult(std::string_view path) {
         char* ctx = nullptr;
         ASSERT_NE(-1, getfilecon(path.data(), &ctx));
-        ASSERT_NE("u:object_r:unlabeled:s0", std::string(ctx));
+        ASSERT_EQ("u:object_r:shell_data_file:s0", std::string(ctx));
         freecon(ctx);
     }
 

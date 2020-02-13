@@ -427,9 +427,10 @@ IncFsControl IncFs_Mount(const char* backingPath, const char* targetDir,
         return {-error, -error, -error};
     }
 
-    int res = selinux_android_restorecon(targetDir, SELINUX_ANDROID_RESTORECON_RECURSE);
-    if (res != 0) {
-        PLOG(ERROR) << "[incfs] Failed to restorecon: " << res;
+    if (const auto err = selinux_android_restorecon(targetDir, SELINUX_ANDROID_RESTORECON_RECURSE);
+        err != 0) {
+        PLOG(ERROR) << "[incfs] Failed to restorecon: " << err;
+        return {err, err, err};
     }
 
     registry().addRoot(targetDir);
