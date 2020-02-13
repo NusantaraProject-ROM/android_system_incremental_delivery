@@ -26,6 +26,8 @@
 #include <errno.h>
 #include <libgen.h>
 #include <openssl/sha.h>
+#include <selinux/android.h>
+#include <selinux/selinux.h>
 #include <sys/mount.h>
 #include <sys/poll.h>
 #include <sys/stat.h>
@@ -423,6 +425,11 @@ IncFsControl IncFs_Mount(const char* backingPath, const char* targetDir,
         const auto error = errno;
         PLOG(ERROR) << "[incfs] Failed to mount IncFS filesystem: " << targetDir;
         return {-error, -error, -error};
+    }
+
+    int res = selinux_android_restorecon(targetDir, SELINUX_ANDROID_RESTORECON_RECURSE);
+    if (res != 0) {
+        PLOG(ERROR) << "[incfs] Failed to restorecon: " << res;
     }
 
     registry().addRoot(targetDir);
