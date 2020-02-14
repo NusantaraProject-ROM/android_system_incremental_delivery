@@ -15,6 +15,7 @@ cc_defaults {
     shared_libs: [
         "libcrypto",
         "liblog",
+        "libselinux",
     ],
     target: {
         linux_bionic: {
