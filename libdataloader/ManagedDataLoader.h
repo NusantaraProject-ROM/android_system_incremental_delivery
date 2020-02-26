@@ -34,10 +34,10 @@ private:
     void onStop() final {}
     void onDestroy() final;
 
-    bool onPrepareImage(const DataLoaderInstallationFiles& addedFiles) final;
+    bool onPrepareImage(DataLoaderInstallationFiles addedFiles) final;
 
-    void onPendingReads(const PendingReads& pendingReads) final {}
-    void onPageReads(const PageReads& pageReads) final {}
+    void onPendingReads(PendingReads pendingReads) final {}
+    void onPageReads(PageReads pageReads) final {}
 
     JavaVM* const mJvm;
     jobject mDataLoader = nullptr;

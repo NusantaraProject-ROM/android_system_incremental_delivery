@@ -153,7 +153,7 @@ static jobject toJavaArrayList(JNIEnv* env, const JniIds& jni,
     return arrayList;
 }
 
-bool ManagedDataLoader::onPrepareImage(const DataLoaderInstallationFiles& addedFiles) {
+bool ManagedDataLoader::onPrepareImage(DataLoaderInstallationFiles addedFiles) {
     CHECK(mDataLoader);
 
     auto env = GetOrAttachJNIEnvironment(mJvm);
