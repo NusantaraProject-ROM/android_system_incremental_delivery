@@ -253,7 +253,7 @@ TEST_F(IncFsTest, WriteBlocksAndPageRead) {
     ASSERT_EQ(0,
               makeFile(control_, mountPath(test_file_name_), 0555, id, {.size = test_file_size_}));
     auto fd = openWrite(control_, fileId(1));
-    ASSERT_GE(fd.get(), 0);
+    ASSERT_GE(fd, 0);
 
     std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
     auto block = DataBlock{
@@ -296,7 +296,7 @@ TEST_F(IncFsTest, WaitForPendingReads) {
         ASSERT_EQ(0, (int)pending_reads[0].block);
 
         auto fd = openWrite(control_, fileId(1));
-        ASSERT_GE(fd.get(), 0);
+        ASSERT_GE(fd, 0);
 
         std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
         auto block = DataBlock{

@@ -121,8 +121,8 @@ inline DataLoaderInstallationFile::DataLoaderInstallationFile(DataLoaderLocation
                                                               RawMetadata&& metadata)
       : mLocation(location), mName(std::move(name)), mSize(size), mMetadata(std::move(metadata)) {}
 
-inline android::base::unique_fd FilesystemConnector::openWrite(FileId fid) {
-    return android::base::unique_fd{DataLoader_FilesystemConnector_openWrite(this, fid)};
+inline int FilesystemConnector::openWrite(FileId fid) {
+    return DataLoader_FilesystemConnector_openWrite(this, fid);
 }
 
 inline int FilesystemConnector::writeBlocks(DataBlocks blocks) {

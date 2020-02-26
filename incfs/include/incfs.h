@@ -15,9 +15,7 @@
  */
 #pragma once
 
-#include "incfs_ndk.h"
-
-#include <android-base/unique_fd.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <span>
@@ -25,6 +23,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "incfs_ndk.h"
 
 namespace android::incfs {
 
@@ -149,8 +149,10 @@ WaitResult waitForPendingReads(Control control, std::chrono::milliseconds timeou
 WaitResult waitForPageReads(Control control, std::chrono::milliseconds timeout,
                             std::vector<ReadInfo>* pageReadsBuffer);
 
-android::base::unique_fd openWrite(Control control, FileId fileId);
-android::base::unique_fd openWrite(Control control, std::string_view path);
+// Returns a file descriptor that needs to be closed.
+int openWrite(Control control, FileId fileId);
+// Returns a file descriptor that needs to be closed.
+int openWrite(Control control, std::string_view path);
 ErrorCode writeBlocks(std::span<const DataBlock> blocks);
 
 } // namespace android::incfs
