@@ -130,8 +130,8 @@ bool DataLoaderService_OnStart(JNIEnv* env, jint storageId);
 bool DataLoaderService_OnStop(JNIEnv* env, jint storageId);
 bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId);
 
-bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobject addedFiles,
-                                      jobject removedFiles);
+bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobjectArray addedFiles,
+                                      jobjectArray removedFiles);
 
 __END_DECLS
 
