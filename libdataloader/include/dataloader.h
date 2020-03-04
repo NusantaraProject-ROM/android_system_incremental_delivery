@@ -15,17 +15,14 @@
  */
 #pragma once
 
-#include "dataloader_ndk.h"
-
-#include "incfs.h"
-
-#include <android-base/unique_fd.h>
-
 #include <functional>
 #include <memory>
 #include <span>
 #include <string>
 #include <vector>
+
+#include "dataloader_ndk.h"
+#include "incfs.h"
 
 namespace android::dataloader {
 
@@ -116,7 +113,8 @@ private:
 };
 
 struct FilesystemConnector : public DataLoaderFilesystemConnector {
-    android::base::unique_fd openWrite(FileId fid);
+    // Returns a file descriptor that needs to be closed.
+    int openWrite(FileId fid);
     int writeBlocks(DataBlocks blocks);
     RawMetadata getRawMetadata(FileId fid);
 };

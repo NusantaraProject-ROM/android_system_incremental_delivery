@@ -32,7 +32,6 @@ namespace {
 
 using namespace android::dataloader;
 using namespace std::literals;
-using android::base::unique_fd;
 
 using FileId = android::incfs::FileId;
 using RawMetadata = android::incfs::RawMetadata;
@@ -399,7 +398,7 @@ public:
                                    offsetBytes, lengthBytes, incomingFd);
     }
 
-    int openWrite(FileId fid) const { return android::incfs::openWrite(mControl, fid).release(); }
+    int openWrite(FileId fid) const { return android::incfs::openWrite(mControl, fid); }
 
     int writeBlocks(std::span<const IncFsDataBlock> blocks) const {
         return android::incfs::writeBlocks(blocks);
