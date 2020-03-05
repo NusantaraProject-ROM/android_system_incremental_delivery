@@ -18,7 +18,6 @@
 #include <unistd.h>
 
 #include <chrono>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -95,6 +94,30 @@ struct UniqueControl final : Control {
     }
 };
 
+// A mini version of std::span
+template <class T>
+class Span {
+public:
+    using iterator = T*;
+    using const_iterator = const T*;
+
+    constexpr Span(T* array, size_t length) : ptr_(array), len_(length) {}
+    template <typename V>
+    constexpr Span(const std::vector<V>& x) : Span(x.data(), x.size()) {}
+
+    constexpr T* data() const { return ptr_; }
+    constexpr size_t size() const { return len_; }
+    constexpr T& operator[](size_t i) const { return *(data() + i); }
+    constexpr iterator begin() const { return data(); }
+    constexpr const_iterator cbegin() const { return begin(); }
+    constexpr iterator end() const { return data() + size(); }
+    constexpr const_iterator cend() const { return end(); }
+
+private:
+    T* ptr_;
+    size_t len_;
+};
+
 using FileId = IncFsFileId;
 using Size = IncFsSize;
 using BlockIndex = IncFsBlockIndex;
@@ -153,7 +176,7 @@ WaitResult waitForPageReads(Control control, std::chrono::milliseconds timeout,
 int openWrite(Control control, FileId fileId);
 // Returns a file descriptor that needs to be closed.
 int openWrite(Control control, std::string_view path);
-ErrorCode writeBlocks(std::span<const DataBlock> blocks);
+ErrorCode writeBlocks(Span<const DataBlock> blocks);
 
 } // namespace android::incfs
 

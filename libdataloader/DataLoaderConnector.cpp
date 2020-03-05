@@ -83,10 +83,10 @@ struct JniIds {
     jmethodID listGet;
     jmethodID listSize;
 
-    jmethodID installationFileGetLocation;
-    jmethodID installationFileGetName;
-    jmethodID installationFileGetLengthBytes;
-    jmethodID installationFileGetMetadata;
+    jfieldID installationFileLocation;
+    jfieldID installationFileName;
+    jfieldID installationFileLengthBytes;
+    jfieldID installationFileMetadata;
 
     JniIds(JNIEnv* env) {
         listener = (jclass)env->NewGlobalRef(
@@ -184,14 +184,13 @@ struct JniIds {
         listGet = GetMethodIDOrDie(env, list, "get", "(I)Ljava/lang/Object;");
         listSize = GetMethodIDOrDie(env, list, "size", "()I");
 
-        auto installationFile = (jclass)FindClassOrDie(env, "android/content/pm/InstallationFile");
-        installationFileGetLocation = GetMethodIDOrDie(env, installationFile, "getLocation", "()I");
-        installationFileGetName =
-                GetMethodIDOrDie(env, installationFile, "getName", "()Ljava/lang/String;");
-        installationFileGetLengthBytes =
-                GetMethodIDOrDie(env, installationFile, "getLengthBytes", "()J");
-        installationFileGetMetadata =
-                GetMethodIDOrDie(env, installationFile, "getMetadata", "()[B");
+        auto installationFileParcel =
+                (jclass)FindClassOrDie(env, "android/content/pm/InstallationFileParcel");
+        installationFileLocation = GetFieldIDOrDie(env, installationFileParcel, "location", "I");
+        installationFileName =
+                GetFieldIDOrDie(env, installationFileParcel, "name", "Ljava/lang/String;");
+        installationFileLengthBytes = GetFieldIDOrDie(env, installationFileParcel, "size", "J");
+        installationFileMetadata = GetFieldIDOrDie(env, installationFileParcel, "metadata", "[B");
     }
 };
 
@@ -400,7 +399,7 @@ public:
 
     int openWrite(FileId fid) const { return android::incfs::openWrite(mControl, fid); }
 
-    int writeBlocks(std::span<const IncFsDataBlock> blocks) const {
+    int writeBlocks(Span<const IncFsDataBlock> blocks) const {
         return android::incfs::writeBlocks(blocks);
     }
 
@@ -610,7 +609,7 @@ int DataLoader_FilesystemConnector_openWrite(DataLoaderFilesystemConnectorPtr if
 int DataLoader_FilesystemConnector_writeBlocks(DataLoaderFilesystemConnectorPtr ifs,
                                                const IncFsDataBlock blocks[], int blocksCount) {
     auto connector = static_cast<DataLoaderConnector*>(ifs);
-    return connector->writeBlocks({blocks, blocksCount});
+    return connector->writeBlocks({blocks, static_cast<size_t>(blocksCount)});
 }
 
 int DataLoader_FilesystemConnector_getRawMetadata(DataLoaderFilesystemConnectorPtr ifs,
@@ -822,7 +821,7 @@ bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId) {
 }
 
 struct DataLoaderInstallationFilesPair {
-    static DataLoaderInstallationFilesPair createFromManaged(JNIEnv* env, jobject files);
+    static DataLoaderInstallationFilesPair createFromManaged(JNIEnv* env, jobjectArray jfiles);
 
     using Files = std::vector<android::dataloader::DataLoaderInstallationFile>;
     const Files& files() const { return mFiles; }
@@ -837,27 +836,27 @@ private:
     NDKFiles mNDKFiles;
 };
 
-DataLoaderInstallationFilesPair DataLoaderInstallationFilesPair::createFromManaged(JNIEnv* env,
-                                                                                   jobject jfiles) {
+DataLoaderInstallationFilesPair DataLoaderInstallationFilesPair::createFromManaged(
+        JNIEnv* env, jobjectArray jfiles) {
     const auto& jni = jniIds(env);
 
-    auto size = env->CallIntMethod(jfiles, jni.listSize);
+    // jfiles is a Java array of InstallationFileParcel
+    auto size = env->GetArrayLength(jfiles);
     DataLoaderInstallationFilesPair::Files files;
     files.reserve(size);
 
     for (int i = 0; i < size; ++i) {
-        jobject jfile = env->CallObjectMethod(jfiles, jni.listGet, i);
+        jobject jfile = env->GetObjectArrayElement(jfiles, i);
 
         DataLoaderLocation location =
-                (DataLoaderLocation)env->CallIntMethod(jfile, jni.installationFileGetLocation);
+                (DataLoaderLocation)env->GetIntField(jfile, jni.installationFileLocation);
         std::string name =
-                env->GetStringUTFChars((jstring)env->CallObjectMethod(jfile,
-                                                                      jni.installationFileGetName),
+                env->GetStringUTFChars((jstring)env->GetObjectField(jfile,
+                                                                    jni.installationFileName),
                                        nullptr);
-        IncFsSize size = env->CallLongMethod(jfile, jni.installationFileGetLengthBytes);
+        IncFsSize size = env->GetLongField(jfile, jni.installationFileLengthBytes);
 
-        auto jmetadataBytes =
-                (jbyteArray)env->CallObjectMethod(jfile, jni.installationFileGetMetadata);
+        auto jmetadataBytes = (jbyteArray)env->GetObjectField(jfile, jni.installationFileMetadata);
         auto metadataElements = env->GetByteArrayElements(jmetadataBytes, nullptr);
         auto metadataLength = env->GetArrayLength(jmetadataBytes);
         RawMetadata metadata(metadataElements, metadataElements + metadataLength);
@@ -885,8 +884,8 @@ DataLoaderInstallationFilesPair::DataLoaderInstallationFilesPair(Files&& files)
     }
 }
 
-bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobject addedFiles,
-                                      jobject removedFiles) {
+bool DataLoaderService_OnPrepareImage(JNIEnv* env, jint storageId, jobjectArray addedFiles,
+                                      jobjectArray removedFiles) {
     jobject listener;
     DataLoaderConnectorPtr dataLoaderConnector;
     {
