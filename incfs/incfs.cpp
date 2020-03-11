@@ -109,10 +109,7 @@ static Features readIncFsFeatures() {
             continue;
         }
         if (entry->d_name == "corefs"sv) {
-            res |= Features::core | Features::externalId;
-        }
-        if (entry->d_name == "uid_timeouts"sv) {
-            res |= Features::uidTimeouts;
+            res |= Features::core;
         }
     }
 
@@ -398,10 +395,6 @@ IncFsControl IncFs_Mount(const char* backingPath, const char* targetDir,
         return {-ENOTSUP, -ENOTSUP, -ENOTSUP};
     }
 
-    if (options.uidReadTimeoutCount > 0 && (readIncFsFeatures() & Features::uidTimeouts) == 0) {
-        return {-ENOTSUP, -ENOTSUP, -ENOTSUP};
-    }
-
     if (auto err = isValidMountTarget(targetDir); err != 0) {
         return {err, err, err};
     }
@@ -478,6 +471,96 @@ IncFsErrorCode IncFs_Root(IncFsControl control, char buffer[], size_t* bufferSiz
     return 0;
 }
 
+template <class T>
+std::optional<T> read(IncFsSpan& data) {
+    if (data.size < (int32_t)sizeof(T)) {
+        return {};
+    }
+    T res;
+    memcpy(&res, data.data, sizeof(res));
+    data.data += sizeof(res);
+    data.size -= sizeof(res);
+    return res;
+}
+
+static IncFsErrorCode validateSignatureFormat(IncFsSpan signature) {
+    if (signature.data == nullptr && signature.size == 0) {
+        return 0; // it's fine to have unverified files too
+    }
+    if ((signature.data == nullptr) != (signature.size == 0)) {
+        return -EINVAL;
+    }
+
+    // These structs are here purely for checking the minimum size. Maybe will use them for
+    // parsing later.
+    struct __attribute__((packed)) Hashing {
+        int32_t size;
+        int32_t algorithm;
+        int8_t log2_blocksize;
+        int32_t salt_size;
+        int32_t raw_root_hash_size;
+    };
+    struct __attribute__((packed)) Signing {
+        int32_t size;
+        int32_t apk_digest_size;
+        int32_t certificate_size;
+        int32_t addl_data_size;
+        int32_t public_key_size;
+        int32_t algorithm;
+        int32_t signature_size;
+    };
+    struct __attribute__((packed)) MinSignature {
+        int32_t version;
+        Hashing hashing_info;
+        Signing signing_info;
+    };
+
+    if (signature.size < (int32_t)sizeof(MinSignature)) {
+        return -ERANGE;
+    }
+    if (signature.size > INCFS_MAX_SIGNATURE_SIZE) {
+        return -ERANGE;
+    }
+
+    auto version = read<int32_t>(signature);
+    if (version.value_or(-1) != INCFS_SIGNATURE_VERSION) {
+        return -EINVAL;
+    }
+    auto hashSize = read<int32_t>(signature);
+    if (!hashSize || signature.size < *hashSize) {
+        return -EINVAL;
+    }
+    auto hashAlgo = read<int32_t>(signature);
+    if (hashAlgo.value_or(-1) != INCFS_HASH_TREE_SHA256) {
+        return -EINVAL;
+    }
+    auto logBlockSize = read<int8_t>(signature);
+    if (logBlockSize.value_or(-1) != 12 /* 2^12 == 4096 */) {
+        return -EINVAL;
+    }
+    auto saltSize = read<int32_t>(signature);
+    if (saltSize.value_or(-1) != 0) {
+        return -EINVAL;
+    }
+    auto rootHashSize = read<int32_t>(signature);
+    if (rootHashSize.value_or(-1) != INCFS_MAX_HASH_SIZE) {
+        return -EINVAL;
+    }
+    if (signature.size < *rootHashSize) {
+        return -EINVAL;
+    }
+    signature.data += *rootHashSize;
+    signature.size -= *rootHashSize;
+    auto signingSize = read<int32_t>(signature);
+    // everything remaining has to be in the signing info
+    if (signingSize.value_or(-1) != signature.size) {
+        return -EINVAL;
+    }
+
+    // TODO: validate the signature part too.
+    return 0;
+}
+
 IncFsErrorCode IncFs_MakeFile(IncFsControl control, const char* path, int32_t mode, IncFsFileId id,
                               IncFsNewFileParams params) {
     auto [root, subpath] = registry().rootAndSubpathFor(path);
@@ -503,21 +586,11 @@ IncFsErrorCode IncFs_MakeFile(IncFsControl control, const char* path, int32_t mo
     static_assert(sizeof(args.file_id.bytes) == sizeof(id.data));
     memcpy(args.file_id.bytes, id.data, sizeof(args.file_id.bytes));
 
-    incfs_file_signature_info sigInfo = {};
-    /*
-    if (params.verification.hashAlgorithm != INCFS_HASH_NONE) {
-        if (params.verification.rootHash.size < INCFS_MAX_HASH_SIZE) {
-            return -EINVAL;
-        }
-        sigInfo.root_hash = (uint64_t)params.verification.rootHash.data;
-        sigInfo.additional_data = (uint64_t)params.verification.additionalData.data;
-        sigInfo.additional_data_size = (uint32_t)params.verification.additionalData.size;
-        sigInfo.signature = (uint64_t)params.verification.signature.data;
-        sigInfo.signature_size = (uint32_t)params.verification.signature.size;
-        sigInfo.hash_tree_alg = params.verification.hashAlgorithm;
+    if (auto err = validateSignatureFormat(params.signature)) {
+        return err;
     }
-    */
-    args.signature_info = (uint64_t)&sigInfo;
+    args.signature_info = (uint64_t)(uintptr_t)params.signature.data;
+    args.signature_size = (uint64_t)params.signature.size;
 
     if (::ioctl(control.cmd, INCFS_IOC_CREATE_FILE, &args)) {
         PLOG(WARNING) << "[incfs] makeFile failed for " << root << " / " << subdir << " / " << name
@@ -785,12 +858,17 @@ IncFsErrorCode IncFs_WaitForPageReads(IncFsControl control, int32_t timeoutMs,
     return 0;
 }
 
-static IncFsFd openWrite(const char* path) {
-    auto fd = ::open(path, O_WRONLY | O_CLOEXEC);
+static IncFsFd openWrite(int cmd, const char* path) {
+    ab::unique_fd fd(::open(path, O_RDONLY | O_CLOEXEC));
     if (fd < 0) {
         return -errno;
     }
-    return fd;
+    struct incfs_permit_fill args = {.file_descriptor = (uint64_t)fd.get()};
+    auto err = ::ioctl(cmd, INCFS_IOC_PERMIT_FILL, &args);
+    if (err < 0) {
+        return -errno;
+    }
+    return fd.release();
 }
 
 IncFsFd IncFs_OpenWriteByPath(IncFsControl control, const char* path) {
@@ -799,7 +877,7 @@ IncFsFd IncFs_OpenWriteByPath(IncFsControl control, const char* path) {
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
-    return openWrite(makeCommandPath(root, path).c_str());
+    return openWrite(control.cmd, makeCommandPath(root, path).c_str());
 }
 
 IncFsFd IncFs_OpenWriteById(IncFsControl control, IncFsFileId id) {
@@ -808,10 +886,10 @@ IncFsFd IncFs_OpenWriteById(IncFsControl control, IncFsFileId id) {
         return -EINVAL;
     }
     auto name = path::join(root, kIndexDir, toStringImpl(id));
-    return openWrite(makeCommandPath(root, name).c_str());
+    return openWrite(control.cmd, makeCommandPath(root, name).c_str());
 }
 
-static int writeBlocks(int fd, const incfs_new_data_block blocks[], int blocksCount) {
+static int writeBlocks(int fd, const incfs_fill_block blocks[], int blocksCount) {
     if (fd < 0 || blocksCount == 0) {
         return 0;
     }
@@ -822,7 +900,9 @@ static int writeBlocks(int fd, const incfs_new_data_block blocks[], int blocksCo
     auto ptr = blocks;
     const auto end = blocks + blocksCount;
     do {
-        const auto written = ::write(fd, ptr, (end - ptr) * sizeof(*ptr));
+        struct incfs_fill_blocks args = {.count = uint64_t(end - ptr),
+                                         .fill_blocks = (uint64_t)(uintptr_t)ptr};
+        const auto written = ::ioctl(fd, INCFS_IOC_FILL_BLOCKS, &args);
         if (written < 0) {
             if (errno == EINTR) {
                 continue;
@@ -836,17 +916,13 @@ static int writeBlocks(int fd, const incfs_new_data_block blocks[], int blocksCo
             // next call handle the error.
             break;
         }
-        if ((written % sizeof(*ptr)) != 0) {
-            PLOG(ERROR) << "write() handled half of an instruction?? " << written;
-            return -EFAULT;
-        }
-        ptr += written / sizeof(*ptr);
+        ptr += written;
     } while (ptr < end);
     return ptr - blocks;
 }
 
 IncFsErrorCode IncFs_WriteBlocks(const IncFsDataBlock blocks[], size_t blocksCount) {
-    incfs_new_data_block incfsBlocks[128];
+    incfs_fill_block incfsBlocks[128];
     int writtenCount = 0;
     int incfsBlocksUsed = 0;
     int lastBlockFd = -1;
@@ -862,7 +938,7 @@ IncFsErrorCode IncFs_WriteBlocks(const IncFsDataBlock blocks[], size_t blocksCou
             lastBlockFd = blocks[i].fileFd;
             incfsBlocksUsed = 0;
         }
-        incfsBlocks[incfsBlocksUsed] = incfs_new_data_block{
+        incfsBlocks[incfsBlocksUsed] = incfs_fill_block{
                 .block_index = (uint32_t)blocks[i].pageIndex,
                 .data_len = blocks[i].dataSize,
                 .data = (uint64_t)blocks[i].data,
