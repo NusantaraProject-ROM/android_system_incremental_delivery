@@ -115,13 +115,7 @@ typedef struct {
 typedef struct {
     IncFsSize size;
     IncFsSpan metadata;
-
-    struct {
-        IncFsHashAlgortithm hashAlgorithm;
-        IncFsSpan rootHash;
-        IncFsSpan additionalData;
-        IncFsSpan signature;
-    } verification;
+    IncFsSpan signature;
 } IncFsNewFileParams;
 
 typedef struct {

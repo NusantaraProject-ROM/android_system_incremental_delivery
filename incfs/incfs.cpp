@@ -504,6 +504,7 @@ IncFsErrorCode IncFs_MakeFile(IncFsControl control, const char* path, int32_t mo
     memcpy(args.file_id.bytes, id.data, sizeof(args.file_id.bytes));
 
     incfs_file_signature_info sigInfo = {};
+    /*
     if (params.verification.hashAlgorithm != INCFS_HASH_NONE) {
         if (params.verification.rootHash.size < INCFS_MAX_HASH_SIZE) {
             return -EINVAL;
@@ -515,6 +516,7 @@ IncFsErrorCode IncFs_MakeFile(IncFsControl control, const char* path, int32_t mo
         sigInfo.signature_size = (uint32_t)params.verification.signature.size;
         sigInfo.hash_tree_alg = params.verification.hashAlgorithm;
     }
+    */
     args.signature_info = (uint64_t)&sigInfo;
 
     if (::ioctl(control.cmd, INCFS_IOC_CREATE_FILE, &args)) {
