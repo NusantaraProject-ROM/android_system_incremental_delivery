@@ -52,7 +52,7 @@
 
 /*
  * Fill in one or more data block. This may only be called on a handle
- * opened with INCFS_IOC_OPEN_FOR_FILLING
+ * passed as a parameter to INCFS_IOC_PERMIT_FILLING
  *
  * Returns number of blocks filled in, or error if none were
  */
@@ -154,7 +154,7 @@ struct incfs_fill_blocks {
  */
 struct incfs_permit_fill {
 	/* File to permit fills on */
-	__u64 file_descriptor;
+	__u32 file_descriptor;
 };
 
 enum incfs_hash_tree_algorithm {
