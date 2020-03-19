@@ -44,8 +44,6 @@ static const int kIncFsFileIdStringLength = sizeof(IncFsFileId) * 2;
 typedef enum {
     INCFS_FEATURE_NONE = 0,
     INCFS_FEATURE_CORE = 1,
-    INCFS_FEATURE_EXTERNAL_ID = 2,
-    INCFS_FEATURE_UID_TIMEOUTS = 4,
 } IncFsFeatures;
 
 typedef int IncFsErrorCode;
@@ -80,15 +78,8 @@ typedef enum {
 } IncFsHashAlgortithm;
 
 typedef struct {
-    int32_t uid;
-    int32_t timeoutMs;
-} IncFsUidReadTimeout;
-
-typedef struct {
     IncFsMountFlags flags;
     int32_t defaultReadTimeoutMs;
-    int32_t uidReadTimeoutCount;
-    IncFsUidReadTimeout* uidReadTimeouts;
     int32_t readLogBufferPages;
     int32_t readLogDisableAfterTimeoutMs;
 } IncFsMountOptions;

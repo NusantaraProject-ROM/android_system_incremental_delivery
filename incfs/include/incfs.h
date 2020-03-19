@@ -35,8 +35,6 @@ enum MountFlags {
 enum Features {
     none = INCFS_FEATURE_NONE,
     core = INCFS_FEATURE_CORE,
-    externalId = INCFS_FEATURE_EXTERNAL_ID,
-    uidTimeouts = INCFS_FEATURE_UID_TIMEOUTS,
 };
 
 enum class HashAlgorithm {
@@ -126,7 +124,6 @@ using Fd = IncFsFd;
 using ReadInfo = IncFsReadInfo;
 using RawMetadata = std::vector<char>;
 using RawSignature = std::vector<char>;
-using UidReadTimeout = IncFsUidReadTimeout;
 using MountOptions = IncFsMountOptions;
 using DataBlock = IncFsDataBlock;
 using NewFileParams = IncFsNewFileParams;
