@@ -863,7 +863,7 @@ static IncFsFd openWrite(int cmd, const char* path) {
     if (fd < 0) {
         return -errno;
     }
-    struct incfs_permit_fill args = {.file_descriptor = (uint64_t)fd.get()};
+    struct incfs_permit_fill args = {.file_descriptor = (uint32_t)fd.get()};
     auto err = ::ioctl(cmd, INCFS_IOC_PERMIT_FILL, &args);
     if (err < 0) {
         return -errno;

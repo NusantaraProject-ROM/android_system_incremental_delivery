@@ -44,9 +44,7 @@ struct JniIds {
         jint DATA_LOADER_STOPPED;
         jint DATA_LOADER_IMAGE_READY;
         jint DATA_LOADER_IMAGE_NOT_READY;
-        jint DATA_LOADER_SLOW_CONNECTION;
-        jint DATA_LOADER_NO_CONNECTION;
-        jint DATA_LOADER_CONNECTION_OK;
+        jint DATA_LOADER_UNRECOVERABLE;
 
         jint DATA_LOADER_TYPE_NONE;
         jint DATA_LOADER_TYPE_STREAMING;
@@ -106,16 +104,10 @@ struct JniIds {
         constants.DATA_LOADER_IMAGE_NOT_READY =
                 GetStaticIntFieldValueOrDie(env, listener, "DATA_LOADER_IMAGE_NOT_READY");
 
-        constants.DATA_LOADER_SLOW_CONNECTION =
-                GetStaticIntFieldValueOrDie(env, listener, "DATA_LOADER_SLOW_CONNECTION");
-        constants.DATA_LOADER_NO_CONNECTION =
-                GetStaticIntFieldValueOrDie(env, listener, "DATA_LOADER_NO_CONNECTION");
-        constants.DATA_LOADER_CONNECTION_OK =
-                GetStaticIntFieldValueOrDie(env, listener, "DATA_LOADER_CONNECTION_OK");
+        constants.DATA_LOADER_UNRECOVERABLE =
+                GetStaticIntFieldValueOrDie(env, listener, "DATA_LOADER_UNRECOVERABLE");
 
-        CHECK(constants.DATA_LOADER_SLOW_CONNECTION == DATA_LOADER_SLOW_CONNECTION);
-        CHECK(constants.DATA_LOADER_NO_CONNECTION == DATA_LOADER_NO_CONNECTION);
-        CHECK(constants.DATA_LOADER_CONNECTION_OK == DATA_LOADER_CONNECTION_OK);
+        CHECK(constants.DATA_LOADER_UNRECOVERABLE == DATA_LOADER_UNRECOVERABLE);
 
         auto packageInstaller = (jclass)FindClassOrDie(env, "android/content/pm/PackageInstaller");
 
