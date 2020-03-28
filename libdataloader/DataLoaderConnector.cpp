@@ -585,9 +585,6 @@ int DataLoader_StatusListener_reportStatus(DataLoaderStatusListenerPtr listener,
 bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jobject control,
                                 jobject params, jobject listener) {
     auto reportDestroyed = [env, storageId](jobject listener) {
-        if (listener) {
-            return;
-        }
         const auto& jni = jniIds(env);
         reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_DESTROYED);
     };
@@ -638,9 +635,6 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
 
 bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
     auto reportStopped = [env, storageId](jobject listener) {
-        if (listener) {
-            return;
-        }
         const auto& jni = jniIds(env);
         reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_STOPPED);
     };
@@ -702,9 +696,6 @@ bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
 
 bool DataLoaderService_OnStop(JNIEnv* env, jint storageId) {
     auto reportStopped = [env, storageId](jobject listener) {
-        if (listener) {
-            return;
-        }
         const auto& jni = jniIds(env);
         reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_STOPPED);
     };
@@ -752,9 +743,6 @@ bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId) {
     DataLoaderService_OnStop(env, storageId);
 
     auto reportDestroyed = [env, storageId](jobject listener) {
-        if (listener) {
-            return;
-        }
         const auto& jni = jniIds(env);
         reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_DESTROYED);
     };
