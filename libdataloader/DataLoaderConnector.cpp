@@ -68,10 +68,6 @@ struct JniIds {
     jfieldID paramsPackageName;
     jfieldID paramsClassName;
     jfieldID paramsArguments;
-    jfieldID paramsDynamicArgs;
-
-    jfieldID namedFdFd;
-    jfieldID namedFdName;
 
     jclass listener;
     jmethodID listenerOnStatusChanged;
@@ -158,12 +154,6 @@ struct JniIds {
         paramsPackageName = GetFieldIDOrDie(env, params, "packageName", "Ljava/lang/String;");
         paramsClassName = GetFieldIDOrDie(env, params, "className", "Ljava/lang/String;");
         paramsArguments = GetFieldIDOrDie(env, params, "arguments", "Ljava/lang/String;");
-        paramsDynamicArgs = GetFieldIDOrDie(env, params, "dynamicArgs",
-                                            "[Landroid/content/pm/NamedParcelFileDescriptor;");
-
-        auto namedFd = FindClassOrDie(env, "android/content/pm/NamedParcelFileDescriptor");
-        namedFdName = GetFieldIDOrDie(env, namedFd, "name", "Ljava/lang/String;");
-        namedFdFd = GetFieldIDOrDie(env, namedFd, "fd", "Landroid/os/ParcelFileDescriptor;");
 
         auto callbackControl =
                 FindClassOrDie(env,
@@ -267,7 +257,6 @@ private:
 
     android::dataloader::DataLoaderParams mDataLoaderParams;
     ::DataLoaderParams mNDKDataLoaderParams;
-    std::vector<DataLoaderNamedFd> mNamedFds;
 };
 
 static constexpr auto kPendingReadsBufferSize = 256;
@@ -487,15 +476,6 @@ DataLoaderParamsPair::DataLoaderParamsPair(android::dataloader::DataLoaderParams
     mNDKDataLoaderParams.packageName = mDataLoaderParams.packageName().c_str();
     mNDKDataLoaderParams.className = mDataLoaderParams.className().c_str();
     mNDKDataLoaderParams.arguments = mDataLoaderParams.arguments().c_str();
-
-    mNamedFds.resize(mDataLoaderParams.dynamicArgs().size());
-    for (size_t i = 0, size = mNamedFds.size(); i < size; ++i) {
-        const auto& arg = mDataLoaderParams.dynamicArgs()[i];
-        mNamedFds[i].name = arg.name.c_str();
-        mNamedFds[i].fd = arg.fd;
-    }
-    mNDKDataLoaderParams.dynamicArgsSize = mNamedFds.size();
-    mNDKDataLoaderParams.dynamicArgs = mNamedFds.data();
 }
 
 DataLoaderParamsPair DataLoaderParamsPair::createFromManaged(JNIEnv* env, jobject managedParams) {
@@ -514,24 +494,9 @@ DataLoaderParamsPair DataLoaderParamsPair::createFromManaged(JNIEnv* env, jobjec
             env->GetStringUTFChars((jstring)env->GetObjectField(managedParams, jni.paramsArguments),
                                    nullptr));
 
-    auto dynamicArgsArray = (jobjectArray)env->GetObjectField(managedParams, jni.paramsDynamicArgs);
-
-    size_t size = env->GetArrayLength(dynamicArgsArray);
-    std::vector<android::dataloader::DataLoaderParams::NamedFd> dynamicArgs(size);
-    for (size_t i = 0; i < size; ++i) {
-        auto dynamicArg = env->GetObjectArrayElement(dynamicArgsArray, i);
-        auto pfd = env->GetObjectField(dynamicArg, jni.namedFdFd);
-        auto fd = env->CallObjectMethod(pfd, jni.parcelFileDescriptorGetFileDescriptor);
-        dynamicArgs[i].fd = jniGetFDFromFileDescriptor(env, fd);
-        dynamicArgs[i].name =
-                (env->GetStringUTFChars((jstring)env->GetObjectField(dynamicArg, jni.namedFdName),
-                                        nullptr));
-    }
-
     return DataLoaderParamsPair(android::dataloader::DataLoaderParams(type, std::move(packageName),
                                                                       std::move(className),
-                                                                      std::move(arguments),
-                                                                      std::move(dynamicArgs)));
+                                                                      std::move(arguments)));
 }
 
 static void cmdLooperThread() {
@@ -636,11 +601,10 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
           pathFromFd(nativeControl.logs).c_str());
 
     auto nativeParams = DataLoaderParamsPair::createFromManaged(env, params);
-    ALOGE("DataLoader::create2: %d/%s/%s/%s/%d", nativeParams.dataLoaderParams().type(),
+    ALOGE("DataLoader::create2: %d/%s/%s/%s", nativeParams.dataLoaderParams().type(),
           nativeParams.dataLoaderParams().packageName().c_str(),
           nativeParams.dataLoaderParams().className().c_str(),
-          nativeParams.dataLoaderParams().arguments().c_str(),
-          (int)nativeParams.dataLoaderParams().dynamicArgs().size());
+          nativeParams.dataLoaderParams().arguments().c_str());
 
     auto callbackControl = createCallbackControl(env, control);
 
