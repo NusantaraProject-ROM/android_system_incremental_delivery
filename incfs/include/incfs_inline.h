@@ -261,6 +261,59 @@ inline ErrorCode writeBlocks(Span<const DataBlock> blocks) {
     return IncFs_WriteBlocks(blocks.data(), blocks.size());
 }
 
+inline std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd) {
+    return getFilledRanges(fd, FilledRanges());
+}
+
+inline std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd,
+                                                          FilledRanges::RangeBuffer&& buffer) {
+    return getFilledRanges(fd, FilledRanges(std::move(buffer), {}));
+}
+
+inline std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd, FilledRanges&& resumeFrom) {
+    auto rawRanges = resumeFrom.internalRawRanges();
+    auto buffer = resumeFrom.extractInternalBufferAndClear();
+    auto totalRanges = resumeFrom.dataRanges().size() + resumeFrom.hashRanges().size();
+    auto remainingSpace = buffer.size() - totalRanges;
+    const bool loadAll = remainingSpace == 0;
+    int res;
+    do {
+        if (remainingSpace == 0) {
+            remainingSpace = std::max<size_t>(32, buffer.size() / 2);
+            buffer.resize(buffer.size() + remainingSpace);
+        }
+        auto outBuffer = IncFsSpan{(const char*)(buffer.data() + rawRanges.dataRangesCount +
+                                                 rawRanges.hashRangesCount),
+                                   IncFsSize(remainingSpace * sizeof(buffer[0]))};
+        IncFsFilledRanges newRanges;
+        res = IncFs_GetFilledRangesStartingFrom(fd, rawRanges.endIndex, outBuffer, &newRanges);
+        if (res && res != -ERANGE) {
+            return {res, FilledRanges(std::move(buffer), {})};
+        }
+
+        rawRanges.dataRangesCount += newRanges.dataRangesCount;
+        rawRanges.hashRangesCount += newRanges.hashRangesCount;
+        rawRanges.endIndex = newRanges.endIndex;
+        remainingSpace = buffer.size() - rawRanges.dataRangesCount - rawRanges.hashRangesCount;
+    } while (res && loadAll);
+
+    rawRanges.dataRanges = buffer.data();
+    rawRanges.hashRanges = buffer.data() + rawRanges.dataRangesCount;
+    return {res, FilledRanges(std::move(buffer), rawRanges)};
+}
+
+inline LoadingState isFullyLoaded(int fd) {
+    auto res = IncFs_IsFullyLoaded(fd);
+    switch (res) {
+        case 0:
+            return LoadingState::Full;
+        case -ENODATA:
+            return LoadingState::MissingBlocks;
+        default:
+            return LoadingState(res);
+    }
+}
+
 } // namespace android::incfs
 
 inline bool operator==(const IncFsFileId& l, const IncFsFileId& r) {

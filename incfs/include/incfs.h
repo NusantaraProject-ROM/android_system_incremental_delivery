@@ -27,6 +27,8 @@
 
 namespace android::incfs {
 
+using ByteBuffer = std::vector<char>;
+
 enum MountFlags {
     createOnly = INCFS_MOUNT_CREATE_ONLY,
     truncate = INCFS_MOUNT_TRUNCATE,
@@ -84,6 +86,8 @@ public:
     constexpr Span(T* array, size_t length) : ptr_(array), len_(length) {}
     template <typename V>
     constexpr Span(const std::vector<V>& x) : Span(x.data(), x.size()) {}
+    template <typename V, size_t Size>
+    constexpr Span(V (&x)[Size]) : Span(x, Size) {}
 
     constexpr T* data() const { return ptr_; }
     constexpr size_t size() const { return len_; }
@@ -98,6 +102,41 @@ private:
     size_t len_;
 };
 
+struct BlockRange final : public IncFsBlockRange {
+    constexpr size_t size() const { return end - begin; }
+    constexpr bool empty() const { return end == begin; }
+};
+
+class FilledRanges final {
+public:
+    using RangeBuffer = std::vector<BlockRange>;
+
+    FilledRanges() = default;
+    FilledRanges(RangeBuffer&& buffer, IncFsFilledRanges ranges)
+          : buffer_(std::move(buffer)), rawFilledRanges_(ranges) {}
+
+    constexpr Span<BlockRange> dataRanges() const {
+        return {(BlockRange*)rawFilledRanges_.dataRanges, (size_t)rawFilledRanges_.dataRangesCount};
+    }
+    constexpr Span<BlockRange> hashRanges() const {
+        return {(BlockRange*)rawFilledRanges_.hashRanges, (size_t)rawFilledRanges_.hashRangesCount};
+    }
+
+    constexpr size_t totalSize() const { return dataRanges().size() + hashRanges().size(); }
+
+    RangeBuffer extractInternalBufferAndClear() {
+        rawFilledRanges_ = {};
+        return std::move(buffer_);
+    }
+
+    constexpr const RangeBuffer& internalBuffer() const { return buffer_; }
+    constexpr IncFsFilledRanges internalRawRanges() const { return rawFilledRanges_; }
+
+private:
+    RangeBuffer buffer_;
+    IncFsFilledRanges rawFilledRanges_;
+};
+
 using Control = UniqueControl;
 
 using FileId = IncFsFileId;
@@ -106,8 +145,8 @@ using BlockIndex = IncFsBlockIndex;
 using ErrorCode = IncFsErrorCode;
 using Fd = IncFsFd;
 using ReadInfo = IncFsReadInfo;
-using RawMetadata = std::vector<char>;
-using RawSignature = std::vector<char>;
+using RawMetadata = ByteBuffer;
+using RawSignature = ByteBuffer;
 using MountOptions = IncFsMountOptions;
 using DataBlock = IncFsDataBlock;
 using NewFileParams = IncFsNewFileParams;
@@ -161,6 +200,15 @@ int openWrite(const Control& control, FileId fileId);
 // Returns a file descriptor that needs to be closed.
 int openWrite(const Control& control, std::string_view path);
 ErrorCode writeBlocks(Span<const DataBlock> blocks);
+
+std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd);
+std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd, FilledRanges::RangeBuffer&& buffer);
+std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd, FilledRanges&& resumeFrom);
+
+enum class LoadingState { Full, MissingBlocks };
+
+LoadingState isFullyLoaded(int fd);
+
 } // namespace android::incfs
 
 bool operator==(const IncFsFileId& l, const IncFsFileId& r);

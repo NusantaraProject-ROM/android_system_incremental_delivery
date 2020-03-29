@@ -118,6 +118,19 @@ typedef struct {
     uint32_t serialNo;
 } IncFsReadInfo;
 
+typedef struct {
+    IncFsBlockIndex begin;
+    IncFsBlockIndex end;
+} IncFsBlockRange;
+
+typedef struct {
+    IncFsBlockRange* dataRanges;
+    IncFsBlockRange* hashRanges;
+    int32_t dataRangesCount;
+    int32_t hashRangesCount;
+    IncFsBlockIndex endIndex;
+} IncFsFilledRanges;
+
 // All functions return -errno in case of failure.
 // All IncFsFd functions return >=0 in case of success.
 // All IncFsFileId functions return invalid IncFsFileId on error.
@@ -181,6 +194,22 @@ IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path);
 IncFsFd IncFs_OpenWriteById(const IncFsControl* control, IncFsFileId id);
 
 IncFsErrorCode IncFs_WriteBlocks(const IncFsDataBlock blocks[], size_t blocksCount);
+
+// Gets a collection of filled ranges in the file from IncFS. Uses the |outBuffer| memory, it has
+// to be big enough to fit all the ranges the caller is expecting.
+// Return codes:
+//  0       - success,
+//  -ERANGE - input buffer is too small. filledRanges are still valid up to the outBuffer.size,
+//            but there are more,
+//  <0      - error, |filledRanges| is not valid.
+IncFsErrorCode IncFs_GetFilledRanges(int fd, IncFsSpan outBuffer, IncFsFilledRanges* filledRanges);
+IncFsErrorCode IncFs_GetFilledRangesStartingFrom(int fd, int startBlockIndex, IncFsSpan outBuffer,
+                                                 IncFsFilledRanges* filledRanges);
+// Check if the file is fully loaded. Return codes:
+//  0        - fully loaded,
+//  -ENODATA - some blocks are missing,
+//  <0       - error from the syscall.
+IncFsErrorCode IncFs_IsFullyLoaded(int fd);
 
 __END_DECLS
 
