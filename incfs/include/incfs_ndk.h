@@ -50,16 +50,18 @@ typedef int IncFsErrorCode;
 typedef int64_t IncFsSize;
 typedef int32_t IncFsBlockIndex;
 typedef int IncFsFd;
-typedef struct {
-    IncFsFd cmd;
-    IncFsFd pendingReads;
-    IncFsFd logs;
-} IncFsControl;
+typedef struct IncFsControl IncFsControl;
 
 typedef struct {
     const char* data;
     IncFsSize size;
 } IncFsSpan;
+
+typedef enum {
+    CMD,
+    PENDING_READS,
+    LOGS,
+} IncFsFdType;
 
 typedef enum {
     INCFS_DEFAULT_READ_TIMEOUT_MS = 10000,
@@ -135,42 +137,48 @@ IncFsFileId IncFs_FileIdFromString(const char* in);
 
 IncFsFileId IncFs_FileIdFromMetadata(IncFsSpan metadata);
 
-IncFsControl IncFs_Mount(const char* backingPath, const char* targetDir, IncFsMountOptions options);
-IncFsControl IncFs_Open(const char* dir);
-IncFsErrorCode IncFs_SetOptions(IncFsControl control, IncFsMountOptions options);
+IncFsControl* IncFs_Mount(const char* backingPath, const char* targetDir,
+                          IncFsMountOptions options);
+IncFsControl* IncFs_Open(const char* dir);
+IncFsControl* IncFs_CreateControl(IncFsFd cmd, IncFsFd pendingReads, IncFsFd logs);
+void IncFs_DeleteControl(IncFsControl* control);
+IncFsFd IncFs_GetControlFd(const IncFsControl* control, IncFsFdType type);
+
+IncFsErrorCode IncFs_SetOptions(const IncFsControl* control, IncFsMountOptions options);
 
 IncFsErrorCode IncFs_BindMount(const char* sourceDir, const char* targetDir);
 IncFsErrorCode IncFs_Unmount(const char* dir);
 
-IncFsErrorCode IncFs_Root(IncFsControl control, char buffer[], size_t* bufferSize);
+IncFsErrorCode IncFs_Root(const IncFsControl* control, char buffer[], size_t* bufferSize);
 
-IncFsErrorCode IncFs_MakeFile(IncFsControl control, const char* path, int32_t mode, IncFsFileId id,
-                              IncFsNewFileParams params);
-IncFsErrorCode IncFs_MakeDir(IncFsControl control, const char* path, int32_t mode);
+IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int32_t mode,
+                              IncFsFileId id, IncFsNewFileParams params);
+IncFsErrorCode IncFs_MakeDir(const IncFsControl* control, const char* path, int32_t mode);
 
-IncFsErrorCode IncFs_GetMetadataById(IncFsControl control, IncFsFileId id, char buffer[],
+IncFsErrorCode IncFs_GetMetadataById(const IncFsControl* control, IncFsFileId id, char buffer[],
                                      size_t* bufferSize);
-IncFsErrorCode IncFs_GetMetadataByPath(IncFsControl control, const char* path, char buffer[],
+IncFsErrorCode IncFs_GetMetadataByPath(const IncFsControl* control, const char* path, char buffer[],
                                        size_t* bufferSize);
 
-IncFsErrorCode IncFs_GetSignatureById(IncFsControl control, IncFsFileId id, char buffer[],
+IncFsErrorCode IncFs_GetSignatureById(const IncFsControl* control, IncFsFileId id, char buffer[],
                                       size_t* bufferSize);
-IncFsErrorCode IncFs_GetSignatureByPath(IncFsControl control, const char* path, char buffer[],
-                                        size_t* bufferSize);
+IncFsErrorCode IncFs_GetSignatureByPath(const IncFsControl* control, const char* path,
+                                        char buffer[], size_t* bufferSize);
 IncFsErrorCode IncFs_UnsafeGetSignatureByPath(const char* path, char buffer[], size_t* bufferSize);
 
-IncFsFileId IncFs_GetId(IncFsControl control, const char* path);
+IncFsFileId IncFs_GetId(const IncFsControl* control, const char* path);
 
-IncFsErrorCode IncFs_Link(IncFsControl control, const char* sourcePath, const char* targetPath);
-IncFsErrorCode IncFs_Unlink(IncFsControl control, const char* path);
+IncFsErrorCode IncFs_Link(const IncFsControl* control, const char* sourcePath,
+                          const char* targetPath);
+IncFsErrorCode IncFs_Unlink(const IncFsControl* control, const char* path);
 
-IncFsErrorCode IncFs_WaitForPendingReads(IncFsControl control, int32_t timeoutMs,
+IncFsErrorCode IncFs_WaitForPendingReads(const IncFsControl* control, int32_t timeoutMs,
                                          IncFsReadInfo buffer[], size_t* bufferSize);
-IncFsErrorCode IncFs_WaitForPageReads(IncFsControl control, int32_t timeoutMs,
+IncFsErrorCode IncFs_WaitForPageReads(const IncFsControl* control, int32_t timeoutMs,
                                       IncFsReadInfo buffer[], size_t* bufferSize);
 
-IncFsFd IncFs_OpenWriteByPath(IncFsControl control, const char* path);
-IncFsFd IncFs_OpenWriteById(IncFsControl control, IncFsFileId id);
+IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path);
+IncFsFd IncFs_OpenWriteById(const IncFsControl* control, IncFsFileId id);
 
 IncFsErrorCode IncFs_WriteBlocks(const IncFsDataBlock blocks[], size_t blocksCount);
 
