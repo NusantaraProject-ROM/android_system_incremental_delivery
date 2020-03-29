@@ -95,16 +95,38 @@ inline IncFsFileId toFileId(std::string_view str) {
     return IncFs_FileIdFromString(str.data());
 }
 
+inline UniqueControl::~UniqueControl() {
+    IncFs_DeleteControl(mControl);
+}
+
+inline IncFsFd UniqueControl::cmd() const {
+    return IncFs_GetControlFd(mControl, CMD);
+}
+
+inline IncFsFd UniqueControl::pendingReads() const {
+    return IncFs_GetControlFd(mControl, PENDING_READS);
+}
+
+inline IncFsFd UniqueControl::logs() const {
+    return IncFs_GetControlFd(mControl, LOGS);
+}
+
 inline UniqueControl mount(std::string_view backingPath, std::string_view targetDir,
                            MountOptions options) {
-    return IncFs_Mount(details::c_str(backingPath), details::c_str(targetDir), options);
+    auto control = IncFs_Mount(details::c_str(backingPath), details::c_str(targetDir), options);
+    return UniqueControl(control);
 }
 
 inline UniqueControl open(std::string_view dir) {
-    return IncFs_Open(details::c_str(dir));
+    auto control = IncFs_Open(details::c_str(dir));
+    return UniqueControl(control);
 }
 
-inline ErrorCode setOptions(Control control, MountOptions newOptions) {
+inline UniqueControl createControl(IncFsFd cmd, IncFsFd pendingReads, IncFsFd logs) {
+    return UniqueControl(IncFs_CreateControl(cmd, pendingReads, logs));
+}
+
+inline ErrorCode setOptions(const Control& control, MountOptions newOptions) {
     return IncFs_SetOptions(control, newOptions);
 }
 
@@ -116,7 +138,7 @@ inline ErrorCode unmount(std::string_view dir) {
     return IncFs_Unmount(details::c_str(dir));
 }
 
-inline std::string root(Control control) {
+inline std::string root(const Control& control) {
     std::string result;
     result.resize(PATH_MAX);
     size_t size = result.size();
@@ -128,15 +150,15 @@ inline std::string root(Control control) {
     return result;
 }
 
-inline ErrorCode makeFile(Control control, std::string_view path, int mode, FileId fileId,
+inline ErrorCode makeFile(const Control& control, std::string_view path, int mode, FileId fileId,
                           NewFileParams params) {
     return IncFs_MakeFile(control, details::c_str(path), mode, fileId, params);
 }
-inline ErrorCode makeDir(Control control, std::string_view path, int mode) {
+inline ErrorCode makeDir(const Control& control, std::string_view path, int mode) {
     return IncFs_MakeDir(control, details::c_str(path), mode);
 }
 
-inline RawMetadata getMetadata(Control control, FileId fileId) {
+inline RawMetadata getMetadata(const Control& control, FileId fileId) {
     RawMetadata metadata(INCFS_MAX_FILE_ATTR_SIZE);
     size_t size = metadata.size();
     if (IncFs_GetMetadataById(control, fileId, metadata.data(), &size) < 0) {
@@ -146,7 +168,7 @@ inline RawMetadata getMetadata(Control control, FileId fileId) {
     return metadata;
 }
 
-inline RawMetadata getMetadata(Control control, std::string_view path) {
+inline RawMetadata getMetadata(const Control& control, std::string_view path) {
     RawMetadata metadata(INCFS_MAX_FILE_ATTR_SIZE);
     size_t size = metadata.size();
     if (IncFs_GetMetadataByPath(control, details::c_str(path), metadata.data(), &size) < 0) {
@@ -156,7 +178,7 @@ inline RawMetadata getMetadata(Control control, std::string_view path) {
     return metadata;
 }
 
-inline RawSignature getSignature(Control control, FileId fileId) {
+inline RawSignature getSignature(const Control& control, FileId fileId) {
     RawSignature signature(INCFS_MAX_SIGNATURE_SIZE);
     size_t size = signature.size();
     if (IncFs_GetSignatureById(control, fileId, signature.data(), &size) < 0) {
@@ -166,7 +188,7 @@ inline RawSignature getSignature(Control control, FileId fileId) {
     return signature;
 }
 
-inline RawSignature getSignature(Control control, std::string_view path) {
+inline RawSignature getSignature(const Control& control, std::string_view path) {
     RawSignature signature(INCFS_MAX_SIGNATURE_SIZE);
     size_t size = signature.size();
     if (IncFs_GetSignatureByPath(control, details::c_str(path), signature.data(), &size) < 0) {
@@ -176,19 +198,20 @@ inline RawSignature getSignature(Control control, std::string_view path) {
     return signature;
 }
 
-inline FileId getFileId(Control control, std::string_view path) {
+inline FileId getFileId(const Control& control, std::string_view path) {
     return IncFs_GetId(control, details::c_str(path));
 }
 
-inline ErrorCode link(Control control, std::string_view sourcePath, std::string_view targetPath) {
+inline ErrorCode link(const Control& control, std::string_view sourcePath,
+                      std::string_view targetPath) {
     return IncFs_Link(control, details::c_str(sourcePath), details::c_str(targetPath));
 }
 
-inline ErrorCode unlink(Control control, std::string_view path) {
+inline ErrorCode unlink(const Control& control, std::string_view path) {
     return IncFs_Unlink(control, details::c_str(path));
 }
 
-inline WaitResult waitForPendingReads(Control control, std::chrono::milliseconds timeout,
+inline WaitResult waitForPendingReads(const Control& control, std::chrono::milliseconds timeout,
                                       std::vector<ReadInfo>* pendingReadsBuffer) {
     static constexpr auto kDefaultBufferSize = INCFS_DEFAULT_PENDING_READ_BUFFER_SIZE;
     if (pendingReadsBuffer->empty()) {
@@ -207,7 +230,7 @@ inline WaitResult waitForPendingReads(Control control, std::chrono::milliseconds
     return WaitResult(err);
 }
 
-inline WaitResult waitForPageReads(Control control, std::chrono::milliseconds timeout,
+inline WaitResult waitForPageReads(const Control& control, std::chrono::milliseconds timeout,
                                    std::vector<ReadInfo>* pageReadsBuffer) {
     static constexpr auto kDefaultBufferSize =
             INCFS_DEFAULT_PAGE_READ_BUFFER_PAGES * PAGE_SIZE / sizeof(ReadInfo);
@@ -227,10 +250,10 @@ inline WaitResult waitForPageReads(Control control, std::chrono::milliseconds ti
     return WaitResult(err);
 }
 
-inline int openWrite(Control control, FileId fileId) {
+inline int openWrite(const Control& control, FileId fileId) {
     return IncFs_OpenWriteById(control, fileId);
 }
-inline int openWrite(Control control, std::string_view path) {
+inline int openWrite(const Control& control, std::string_view path) {
     return IncFs_OpenWriteByPath(control, details::c_str(path));
 }
 

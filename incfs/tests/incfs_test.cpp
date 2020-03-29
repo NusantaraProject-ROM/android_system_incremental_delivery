@@ -61,9 +61,9 @@ protected:
                                                                        std::chrono::milliseconds>(
                                                                        kDefaultReadTimeout)
                                                                        .count()});
-            ASSERT_TRUE(control_.cmd >= 0) << "Expected >= 0 got " << control_.cmd;
-            ASSERT_TRUE(control_.pendingReads >= 0);
-            ASSERT_TRUE(control_.logs >= 0);
+            ASSERT_TRUE(control_.cmd() >= 0) << "Expected >= 0 got " << control_.cmd();
+            ASSERT_TRUE(control_.pendingReads() >= 0);
+            ASSERT_TRUE(control_.logs() >= 0);
             checkRestoreconResult(mountPath(INCFS_PENDING_READS_FILENAME));
             checkRestoreconResult(mountPath(INCFS_LOG_FILENAME));
         }
@@ -77,7 +77,6 @@ protected:
     }
 
     virtual void TearDown() {
-        control_.reset();
         unmount(mount_dir_path_);
         tmp_dir_for_image_.reset();
         tmp_dir_for_mount_.reset();
@@ -108,7 +107,7 @@ protected:
     inline static const std::string_view test_file_name_ = "test.txt"sv;
     inline static const std::string_view test_dir_name_ = "test_dir"sv;
     inline static const int test_file_size_ = INCFS_DATA_FILE_BLOCK_SIZE;
-    UniqueControl control_;
+    Control control_;
 };
 
 TEST_F(IncFsTest, GetIncfsFeatures) {
@@ -167,18 +166,18 @@ TEST_F(IncFsTest, Root) {
 }
 
 TEST_F(IncFsTest, Open) {
-    IncFsControl control = open(mount_dir_path_);
-    ASSERT_TRUE(control.cmd >= 0);
-    ASSERT_TRUE(control.pendingReads >= 0);
-    ASSERT_TRUE(control.logs >= 0);
+    Control control = open(mount_dir_path_);
+    ASSERT_TRUE(control.cmd() >= 0);
+    ASSERT_TRUE(control.pendingReads() >= 0);
+    ASSERT_TRUE(control.logs() >= 0);
 }
 
 TEST_F(IncFsTest, OpenFail) {
     TemporaryDir tmp_dir_to_bind;
-    IncFsControl control = open(tmp_dir_to_bind.path);
-    ASSERT_TRUE(control.cmd < 0);
-    ASSERT_TRUE(control.pendingReads < 0);
-    ASSERT_TRUE(control.logs < 0);
+    Control control = open(tmp_dir_to_bind.path);
+    ASSERT_TRUE(control.cmd() < 0);
+    ASSERT_TRUE(control.pendingReads() < 0);
+    ASSERT_TRUE(control.logs() < 0);
 }
 
 TEST_F(IncFsTest, MakeFile) {
@@ -249,7 +248,7 @@ TEST_F(IncFsTest, LinkAndUnlink) {
 
 TEST_F(IncFsTest, WriteBlocksAndPageRead) {
     const auto id = fileId(1);
-    ASSERT_TRUE(control_.logs >= 0);
+    ASSERT_TRUE(control_.logs() >= 0);
     ASSERT_EQ(0,
               makeFile(control_, mountPath(test_file_name_), 0555, id, {.size = test_file_size_}));
     auto fd = openWrite(control_, fileId(1));

@@ -52,44 +52,26 @@ enum class BlockKind {
     hash = INCFS_BLOCK_KIND_HASH,
 };
 
-using Control = IncFsControl;
-
-struct UniqueControl final : Control {
-    UniqueControl(Control c) : Control(c) {}
-    UniqueControl() : UniqueControl({-1, -1, -1}) {}
-
-    ~UniqueControl() { reset(); }
-
+class UniqueControl {
+public:
+    UniqueControl() : mControl(nullptr) {}
+    UniqueControl(IncFsControl* control) : mControl(control) {}
+    ~UniqueControl();
+    IncFsFd cmd() const;
+    IncFsFd pendingReads() const;
+    IncFsFd logs() const;
+    operator IncFsControl*() const { return mControl; };
     UniqueControl(UniqueControl&& other) noexcept {
-        cmd = std::exchange(other.cmd, -1);
-        logs = std::exchange(other.logs, -1);
-        pendingReads = std::exchange(other.pendingReads, -1);
+        mControl = std::exchange(other.mControl, nullptr);
     }
-
     UniqueControl& operator=(UniqueControl&& other) {
         this->~UniqueControl();
         new (this) UniqueControl(std::move(other));
         return *this;
     }
 
-    [[nodiscard]] Control release() {
-        Control res = *this;
-        cmd = logs = pendingReads = -1;
-        return res;
-    }
-
-    void reset() {
-        if (cmd >= 0) {
-            close(cmd);
-        }
-        if (logs >= 0) {
-            close(logs);
-        }
-        if (pendingReads >= 0) {
-            close(pendingReads);
-        }
-        cmd = logs = pendingReads = -1;
-    }
+private:
+    IncFsControl* mControl;
 };
 
 // A mini version of std::span
@@ -116,6 +98,8 @@ private:
     size_t len_;
 };
 
+using Control = UniqueControl;
+
 using FileId = IncFsFileId;
 using Size = IncFsSize;
 using BlockIndex = IncFsBlockIndex;
@@ -139,42 +123,44 @@ std::string toString(FileId fileId);
 IncFsFileId toFileId(std::string_view str);
 bool isIncFsPath(std::string_view path);
 
-UniqueControl mount(std::string_view backingPath, std::string_view targetDir, MountOptions options);
+UniqueControl mount(std::string_view backingPath, std::string_view targetDir,
+                    IncFsMountOptions options);
 UniqueControl open(std::string_view dir);
-ErrorCode setOptions(Control control, MountOptions newOptions);
+UniqueControl createControl(IncFsFd cmd, IncFsFd pendingReads, IncFsFd logs);
+
+ErrorCode setOptions(const Control& control, MountOptions newOptions);
 
 ErrorCode bindMount(std::string_view sourceDir, std::string_view targetDir);
 ErrorCode unmount(std::string_view dir);
 
-std::string root(Control control);
+std::string root(const Control& control);
 
-ErrorCode makeFile(Control control, std::string_view path, int mode, FileId fileId,
+ErrorCode makeFile(const Control& control, std::string_view path, int mode, FileId fileId,
                    NewFileParams params);
-ErrorCode makeDir(Control control, std::string_view path, int mode = 0555);
+ErrorCode makeDir(const Control& control, std::string_view path, int mode = 0555);
 
-RawMetadata getMetadata(Control control, FileId fileId);
-RawMetadata getMetadata(Control control, std::string_view path);
-FileId getFileId(Control control, std::string_view path);
+RawMetadata getMetadata(const Control& control, FileId fileId);
+RawMetadata getMetadata(const Control& control, std::string_view path);
+FileId getFileId(const Control& control, std::string_view path);
 
-RawSignature getSignature(Control control, FileId fileId);
-RawSignature getSignature(Control control, std::string_view path);
+RawSignature getSignature(const Control& control, FileId fileId);
+RawSignature getSignature(const Control& control, std::string_view path);
 
-ErrorCode link(Control control, std::string_view sourcePath, std::string_view targetPath);
-ErrorCode unlink(Control control, std::string_view path);
+ErrorCode link(const Control& control, std::string_view sourcePath, std::string_view targetPath);
+ErrorCode unlink(const Control& control, std::string_view path);
 
 enum class WaitResult { HaveData, Timeout, Error };
 
-WaitResult waitForPendingReads(Control control, std::chrono::milliseconds timeout,
+WaitResult waitForPendingReads(const Control& control, std::chrono::milliseconds timeout,
                                std::vector<ReadInfo>* pendingReadsBuffer);
-WaitResult waitForPageReads(Control control, std::chrono::milliseconds timeout,
+WaitResult waitForPageReads(const Control& control, std::chrono::milliseconds timeout,
                             std::vector<ReadInfo>* pageReadsBuffer);
 
 // Returns a file descriptor that needs to be closed.
-int openWrite(Control control, FileId fileId);
+int openWrite(const Control& control, FileId fileId);
 // Returns a file descriptor that needs to be closed.
-int openWrite(Control control, std::string_view path);
+int openWrite(const Control& control, std::string_view path);
 ErrorCode writeBlocks(Span<const DataBlock> blocks);
-
 } // namespace android::incfs
 
 bool operator==(const IncFsFileId& l, const IncFsFileId& r);
