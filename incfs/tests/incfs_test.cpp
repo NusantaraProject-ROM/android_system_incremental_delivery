@@ -251,6 +251,12 @@ TEST_F(IncFsTest, Root) {
     ASSERT_EQ(mount_dir_path_, root(control_)) << "Error: " << errno;
 }
 
+TEST_F(IncFsTest, RootInvalidControl) {
+    const TemporaryFile tmp_file;
+    auto control{createControl(tmp_file.fd, -1, -1)};
+    ASSERT_EQ("", root(control)) << "Error: " << errno;
+}
+
 TEST_F(IncFsTest, Open) {
     Control control = open(mount_dir_path_);
     ASSERT_TRUE(control.cmd() >= 0);

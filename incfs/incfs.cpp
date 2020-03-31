@@ -87,7 +87,7 @@ static ab::unique_fd openPendingReads(std::string_view dir) {
     return openRaw(dir, INCFS_PENDING_READS_FILENAME);
 }
 
-static std::string root(int fd) {
+static std::string rootForCmd(int fd) {
     auto cmdFile = path::fromFd(fd);
     if (cmdFile.empty()) {
         LOG(INFO) << __func__ << "(): name empty for " << fd;
@@ -96,6 +96,10 @@ static std::string root(int fd) {
     auto res = path::dirName(cmdFile);
     if (res.empty()) {
         LOG(INFO) << __func__ << "(): dirname empty for " << cmdFile;
+        return {};
+    }
+    if (!cmdFile.ends_with(INCFS_PENDING_READS_FILENAME)) {
+        LOG(INFO) << __func__ << "(): invalid file name " << cmdFile;
         return {};
     }
     if (cmdFile.data() == res.data() || cmdFile.starts_with(res)) {
@@ -491,7 +495,7 @@ void IncFs_DeleteControl(IncFsControl* control) {
 }
 
 IncFsErrorCode IncFs_SetOptions(const IncFsControl* control, IncFsMountOptions options) {
-    auto root = ::root(IncFs_GetControlFd(control, CMD));
+    auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -506,7 +510,7 @@ IncFsErrorCode IncFs_SetOptions(const IncFsControl* control, IncFsMountOptions o
 }
 
 IncFsErrorCode IncFs_Root(const IncFsControl* control, char buffer[], size_t* bufferSize) {
-    std::string result = ::root(IncFs_GetControlFd(control, CMD));
+    std::string result = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (*bufferSize <= result.size()) {
         *bufferSize = result.size() + 1;
         return -EOVERFLOW;
@@ -651,7 +655,7 @@ IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int
 }
 
 IncFsErrorCode IncFs_MakeDir(const IncFsControl* control, const char* path, int32_t mode) {
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         LOG(ERROR) << __func__ << "(): root is empty for " << path;
         return -EINVAL;
@@ -690,7 +694,7 @@ static IncFsErrorCode getMetadata(const char* path, char buffer[], size_t* buffe
 
 IncFsErrorCode IncFs_GetMetadataById(const IncFsControl* control, IncFsFileId fileId, char buffer[],
                                      size_t* bufferSize) {
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -701,7 +705,7 @@ IncFsErrorCode IncFs_GetMetadataById(const IncFsControl* control, IncFsFileId fi
 IncFsErrorCode IncFs_GetMetadataByPath(const IncFsControl* control, const char* path, char buffer[],
                                        size_t* bufferSize) {
     const auto pathRoot = registry().rootFor(path);
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
@@ -711,7 +715,7 @@ IncFsErrorCode IncFs_GetMetadataByPath(const IncFsControl* control, const char* 
 
 IncFsFileId IncFs_GetId(const IncFsControl* control, const char* path) {
     const auto pathRoot = registry().rootFor(path);
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty() || root != pathRoot) {
         errno = EINVAL;
         return kIncFsInvalidFileId;
@@ -743,7 +747,7 @@ static IncFsErrorCode getSignature(int fd, char buffer[], size_t* bufferSize) {
 
 IncFsErrorCode IncFs_GetSignatureById(const IncFsControl* control, IncFsFileId fileId,
                                       char buffer[], size_t* bufferSize) {
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -758,7 +762,7 @@ IncFsErrorCode IncFs_GetSignatureById(const IncFsControl* control, IncFsFileId f
 IncFsErrorCode IncFs_GetSignatureByPath(const IncFsControl* control, const char* path,
                                         char buffer[], size_t* bufferSize) {
     const auto pathRoot = registry().rootFor(path);
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
@@ -778,7 +782,7 @@ IncFsErrorCode IncFs_UnsafeGetSignatureByPath(const char* path, char buffer[], s
 
 IncFsErrorCode IncFs_Link(const IncFsControl* control, const char* fromPath,
                           const char* wherePath) {
-    auto root = ::root(IncFs_GetControlFd(control, CMD));
+    auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -797,7 +801,7 @@ IncFsErrorCode IncFs_Link(const IncFsControl* control, const char* fromPath,
 }
 
 IncFsErrorCode IncFs_Unlink(const IncFsControl* control, const char* path) {
-    auto root = ::root(IncFs_GetControlFd(control, CMD));
+    auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -922,7 +926,7 @@ static IncFsFd openWrite(int cmd, const char* path) {
 IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path) {
     const auto pathRoot = registry().rootFor(path);
     const auto cmd = IncFs_GetControlFd(control, CMD);
-    const auto root = ::root(cmd);
+    const auto root = rootForCmd(cmd);
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
@@ -931,7 +935,7 @@ IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path) {
 
 IncFsFd IncFs_OpenWriteById(const IncFsControl* control, IncFsFileId id) {
     const auto cmd = IncFs_GetControlFd(control, CMD);
-    const auto root = ::root(cmd);
+    const auto root = rootForCmd(cmd);
     if (root.empty()) {
         return -EINVAL;
     }
