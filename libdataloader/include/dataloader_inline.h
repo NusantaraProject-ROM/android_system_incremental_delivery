@@ -132,6 +132,10 @@ inline RawMetadata FilesystemConnector::getRawMetadata(FileId fid) {
     return metadata;
 }
 
+inline bool FilesystemConnector::setParams(DataLoaderFilesystemParams params) {
+    return DataLoader_FilesystemConnector_setParams(this, params);
+}
+
 inline bool StatusListener::reportStatus(DataLoaderStatus status) {
     return DataLoader_StatusListener_reportStatus(this, status);
 }

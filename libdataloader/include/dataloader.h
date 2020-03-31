@@ -111,6 +111,7 @@ struct FilesystemConnector : public DataLoaderFilesystemConnector {
     int openWrite(FileId fid);
     int writeBlocks(DataBlocks blocks);
     RawMetadata getRawMetadata(FileId fid);
+    bool setParams(DataLoaderFilesystemParams);
 };
 
 struct StatusListener : public DataLoaderStatusListener {
