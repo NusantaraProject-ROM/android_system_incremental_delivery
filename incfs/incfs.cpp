@@ -87,7 +87,7 @@ static ab::unique_fd openPendingReads(std::string_view dir) {
     return openRaw(dir, INCFS_PENDING_READS_FILENAME);
 }
 
-static std::string root(int fd) {
+static std::string rootForCmd(int fd) {
     auto cmdFile = path::fromFd(fd);
     if (cmdFile.empty()) {
         LOG(INFO) << __func__ << "(): name empty for " << fd;
@@ -96,6 +96,10 @@ static std::string root(int fd) {
     auto res = path::dirName(cmdFile);
     if (res.empty()) {
         LOG(INFO) << __func__ << "(): dirname empty for " << cmdFile;
+        return {};
+    }
+    if (!cmdFile.ends_with(INCFS_PENDING_READS_FILENAME)) {
+        LOG(INFO) << __func__ << "(): invalid file name " << cmdFile;
         return {};
     }
     if (cmdFile.data() == res.data() || cmdFile.starts_with(res)) {
@@ -491,7 +495,7 @@ void IncFs_DeleteControl(IncFsControl* control) {
 }
 
 IncFsErrorCode IncFs_SetOptions(const IncFsControl* control, IncFsMountOptions options) {
-    auto root = ::root(IncFs_GetControlFd(control, CMD));
+    auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -506,7 +510,7 @@ IncFsErrorCode IncFs_SetOptions(const IncFsControl* control, IncFsMountOptions o
 }
 
 IncFsErrorCode IncFs_Root(const IncFsControl* control, char buffer[], size_t* bufferSize) {
-    std::string result = ::root(IncFs_GetControlFd(control, CMD));
+    std::string result = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (*bufferSize <= result.size()) {
         *bufferSize = result.size() + 1;
         return -EOVERFLOW;
@@ -651,7 +655,7 @@ IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int
 }
 
 IncFsErrorCode IncFs_MakeDir(const IncFsControl* control, const char* path, int32_t mode) {
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         LOG(ERROR) << __func__ << "(): root is empty for " << path;
         return -EINVAL;
@@ -690,7 +694,7 @@ static IncFsErrorCode getMetadata(const char* path, char buffer[], size_t* buffe
 
 IncFsErrorCode IncFs_GetMetadataById(const IncFsControl* control, IncFsFileId fileId, char buffer[],
                                      size_t* bufferSize) {
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -701,7 +705,7 @@ IncFsErrorCode IncFs_GetMetadataById(const IncFsControl* control, IncFsFileId fi
 IncFsErrorCode IncFs_GetMetadataByPath(const IncFsControl* control, const char* path, char buffer[],
                                        size_t* bufferSize) {
     const auto pathRoot = registry().rootFor(path);
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
@@ -711,7 +715,7 @@ IncFsErrorCode IncFs_GetMetadataByPath(const IncFsControl* control, const char* 
 
 IncFsFileId IncFs_GetId(const IncFsControl* control, const char* path) {
     const auto pathRoot = registry().rootFor(path);
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty() || root != pathRoot) {
         errno = EINVAL;
         return kIncFsInvalidFileId;
@@ -743,7 +747,7 @@ static IncFsErrorCode getSignature(int fd, char buffer[], size_t* bufferSize) {
 
 IncFsErrorCode IncFs_GetSignatureById(const IncFsControl* control, IncFsFileId fileId,
                                       char buffer[], size_t* bufferSize) {
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -758,7 +762,7 @@ IncFsErrorCode IncFs_GetSignatureById(const IncFsControl* control, IncFsFileId f
 IncFsErrorCode IncFs_GetSignatureByPath(const IncFsControl* control, const char* path,
                                         char buffer[], size_t* bufferSize) {
     const auto pathRoot = registry().rootFor(path);
-    const auto root = ::root(IncFs_GetControlFd(control, CMD));
+    const auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
@@ -778,7 +782,7 @@ IncFsErrorCode IncFs_UnsafeGetSignatureByPath(const char* path, char buffer[], s
 
 IncFsErrorCode IncFs_Link(const IncFsControl* control, const char* fromPath,
                           const char* wherePath) {
-    auto root = ::root(IncFs_GetControlFd(control, CMD));
+    auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -797,7 +801,7 @@ IncFsErrorCode IncFs_Link(const IncFsControl* control, const char* fromPath,
 }
 
 IncFsErrorCode IncFs_Unlink(const IncFsControl* control, const char* path) {
-    auto root = ::root(IncFs_GetControlFd(control, CMD));
+    auto root = rootForCmd(IncFs_GetControlFd(control, CMD));
     if (root.empty()) {
         return -EINVAL;
     }
@@ -922,7 +926,7 @@ static IncFsFd openWrite(int cmd, const char* path) {
 IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path) {
     const auto pathRoot = registry().rootFor(path);
     const auto cmd = IncFs_GetControlFd(control, CMD);
-    const auto root = ::root(cmd);
+    const auto root = rootForCmd(cmd);
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
@@ -931,7 +935,7 @@ IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path) {
 
 IncFsFd IncFs_OpenWriteById(const IncFsControl* control, IncFsFileId id) {
     const auto cmd = IncFs_GetControlFd(control, CMD);
-    const auto root = ::root(cmd);
+    const auto root = rootForCmd(cmd);
     if (root.empty()) {
         return -EINVAL;
     }
@@ -1054,4 +1058,156 @@ IncFsErrorCode IncFs_Unmount(const char* dir) {
 
 bool IncFs_IsIncFsPath(const char* path) {
     return isIncFsPath(path);
+}
+
+IncFsErrorCode IncFs_GetFilledRanges(int fd, IncFsSpan outBuffer, IncFsFilledRanges* filledRanges) {
+    return IncFs_GetFilledRangesStartingFrom(fd, 0, outBuffer, filledRanges);
+}
+
+IncFsErrorCode IncFs_GetFilledRangesStartingFrom(int fd, int startBlockIndex, IncFsSpan outBuffer,
+                                                 IncFsFilledRanges* filledRanges) {
+    if (fd < 0) {
+        return -EBADF;
+    }
+    if (startBlockIndex < 0) {
+        return -EINVAL;
+    }
+    if (!outBuffer.data && outBuffer.size > 0) {
+        return -EINVAL;
+    }
+    if (!filledRanges) {
+        return -EINVAL;
+    }
+    // Use this to optimize the incfs call and have the same buffer for both the incfs and the
+    // public structs.
+    static_assert(sizeof(IncFsBlockRange) == sizeof(incfs_filled_range));
+
+    *filledRanges = {};
+
+    auto outStart = (IncFsBlockRange*)outBuffer.data;
+    auto outEnd = outStart + outBuffer.size / sizeof(*outStart);
+
+    auto outPtr = outStart;
+    int error = 0;
+    int totalBlocks;
+    incfs_get_filled_blocks_args args = {};
+    for (;;) {
+        auto start = args.index_out ? args.index_out : startBlockIndex;
+        args = incfs_get_filled_blocks_args{
+                .range_buffer = (uint64_t)(uintptr_t)outPtr,
+                .range_buffer_size = uint32_t((outEnd - outPtr) * sizeof(*outPtr)),
+                .start_index = start,
+        };
+        errno = 0;
+        auto res = ::ioctl(fd, INCFS_IOC_GET_FILLED_BLOCKS, &args);
+        error = errno;
+        if (res && error != EINTR && error != ERANGE) {
+            return -error;
+        }
+
+        totalBlocks = args.total_blocks_out;
+        outPtr += args.range_buffer_size_out / sizeof(incfs_filled_range);
+        if (!res || error == ERANGE) {
+            break;
+        }
+        // in case of EINTR we want to continue calling the function
+    }
+
+    if (outPtr > outEnd) {
+        outPtr = outEnd;
+        error = ERANGE;
+    }
+
+    filledRanges->endIndex = args.index_out;
+    auto hashStartPtr = outPtr;
+    if (outPtr != outStart) {
+        // need to know the file size to be able to split the hash blocks from data.
+        struct stat st;
+        if (::fstat(fd, &st)) {
+            return -errno;
+        }
+        const auto dataBlocks =
+                (st.st_size + INCFS_DATA_FILE_BLOCK_SIZE - 1) / INCFS_DATA_FILE_BLOCK_SIZE;
+
+        // now figure out the ranges for data block and hash blocks in the output
+        for (; hashStartPtr != outStart; --hashStartPtr) {
+            if ((hashStartPtr - 1)->begin < dataBlocks) {
+                break;
+            }
+        }
+        auto lastDataPtr = hashStartPtr - 1;
+        // here we go, this is the first block that's before or at the hashes
+        if (lastDataPtr->end <= dataBlocks) {
+            ; // we're good, the boundary is between the ranges - |hashStartPtr| is correct
+        } else {
+            // the hard part: split the |lastDataPtr| range into the data and the hash pieces
+            if (outPtr == outEnd) {
+                // the buffer turned out to be too small, even though it actually wasn't
+                error = ERANGE;
+                if (hashStartPtr == outEnd) {
+                    // this is even worse: there's no room to put even a single hash block into.
+                    filledRanges->endIndex = lastDataPtr->end = dataBlocks;
+                } else {
+                    std::copy_backward(lastDataPtr, outPtr - 1, outPtr);
+                    lastDataPtr->end = hashStartPtr->begin = dataBlocks;
+                    filledRanges->endIndex = (outPtr - 1)->end;
+                }
+            } else {
+                std::copy_backward(lastDataPtr, outPtr, outPtr + 1);
+                lastDataPtr->end = hashStartPtr->begin = dataBlocks;
+                ++outPtr;
+            }
+        }
+        // now fix the indices of all hash blocks - no one should know they're simply past the
+        // regular data blocks in the file!
+        for (auto ptr = hashStartPtr; ptr != outPtr; ++ptr) {
+            ptr->begin -= dataBlocks;
+            ptr->end -= dataBlocks;
+        }
+    }
+
+    filledRanges->dataRanges = outStart;
+    filledRanges->dataRangesCount = hashStartPtr - outStart;
+    filledRanges->hashRanges = hashStartPtr;
+    filledRanges->hashRangesCount = outPtr - hashStartPtr;
+
+    return -error;
+}
+
+IncFsErrorCode IncFs_IsFullyLoaded(int fd) {
+    char buffer[2 * sizeof(IncFsBlockRange)];
+    IncFsFilledRanges ranges;
+    auto res = IncFs_GetFilledRanges(fd, IncFsSpan{.data = buffer, .size = std::size(buffer)},
+                                     &ranges);
+    if (res == -ERANGE) {
+        // need room for more than two ranges - definitely not fully loaded
+        return -ENODATA;
+    }
+    if (res != 0) {
+        return res;
+    }
+    // empty file
+    if (ranges.endIndex == 0) {
+        return 0;
+    }
+    // file with no hash tree
+    if (ranges.dataRangesCount == 1 && ranges.hashRangesCount == 0) {
+        return (ranges.dataRanges[0].begin == 0 && ranges.dataRanges[0].end == ranges.endIndex)
+                ? 0
+                : -ENODATA;
+    }
+    // file with a hash tree
+    if (ranges.dataRangesCount == 1 && ranges.hashRangesCount == 1) {
+        // calculate the expected data size from the size of the hash range and |endIndex|, which is
+        // the total number of blocks in the file, both data and hash blocks together.
+        if (ranges.hashRanges[0].begin != 0) {
+            return -ENODATA;
+        }
+        const auto expectedDataBlocks =
+                ranges.endIndex - (ranges.hashRanges[0].end - ranges.hashRanges[0].begin);
+        return (ranges.dataRanges[0].begin == 0 && ranges.dataRanges[0].end == expectedDataBlocks)
+                ? 0
+                : -ENODATA;
+    }
+    return -ENODATA;
 }

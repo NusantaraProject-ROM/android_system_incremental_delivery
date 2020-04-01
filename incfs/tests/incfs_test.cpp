@@ -100,6 +100,92 @@ protected:
         return {.data = sv.data(), .size = IncFsSize(sv.size())};
     }
 
+    int makeFileWithHash(int id) {
+        // calculate the required size for two leaf hash blocks
+        constexpr auto size =
+                (INCFS_DATA_FILE_BLOCK_SIZE / INCFS_MAX_HASH_SIZE + 1) * INCFS_DATA_FILE_BLOCK_SIZE;
+
+        // assemble a signature/hashing data for it
+        struct __attribute__((packed)) Signature {
+            uint32_t version = INCFS_SIGNATURE_VERSION;
+            uint32_t hashingSize = sizeof(hashing);
+            struct __attribute__((packed)) Hashing {
+                uint32_t algo = INCFS_HASH_TREE_SHA256;
+                uint8_t log2Blocksize = 12;
+                uint32_t saltSize = 0;
+                uint32_t rootHashSize = INCFS_MAX_HASH_SIZE;
+                char rootHash[INCFS_MAX_HASH_SIZE] = {};
+            } hashing;
+            uint32_t signingSize = 0;
+        } signature;
+
+        int res = makeFile(control_, mountPath(test_file_name_), 0555, fileId(id),
+                           {.size = size,
+                            .signature = {.data = (char*)&signature, .size = sizeof(signature)}});
+        EXPECT_EQ(0, res);
+        return res ? -1 : size;
+    }
+
+    static int sizeToPages(int size) {
+        return (size + INCFS_DATA_FILE_BLOCK_SIZE - 1) / INCFS_DATA_FILE_BLOCK_SIZE;
+    }
+
+    void writeTestRanges(int id, int size) {
+        auto wfd = openWrite(control_, fileId(id));
+        ASSERT_GE(wfd, 0);
+
+        auto lastPage = sizeToPages(size) - 1;
+
+        std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
+        DataBlock blocks[] = {{
+                                      .fileFd = wfd,
+                                      .pageIndex = 1,
+                                      .compression = INCFS_COMPRESSION_KIND_NONE,
+                                      .dataSize = (uint32_t)data.size(),
+                                      .data = data.data(),
+                              },
+                              {
+                                      .fileFd = wfd,
+                                      .pageIndex = 2,
+                                      .compression = INCFS_COMPRESSION_KIND_NONE,
+                                      .dataSize = (uint32_t)data.size(),
+                                      .data = data.data(),
+                              },
+                              {
+                                      .fileFd = wfd,
+                                      .pageIndex = 10,
+                                      .compression = INCFS_COMPRESSION_KIND_NONE,
+                                      .dataSize = (uint32_t)data.size(),
+                                      .data = data.data(),
+                              },
+                              {
+                                      .fileFd = wfd,
+                                      // last data page
+                                      .pageIndex = lastPage,
+                                      .compression = INCFS_COMPRESSION_KIND_NONE,
+                                      .dataSize = (uint32_t)data.size(),
+                                      .data = data.data(),
+                              },
+                              {
+                                      .fileFd = wfd,
+                                      // first hash page
+                                      .pageIndex = 0,
+                                      .compression = INCFS_COMPRESSION_KIND_NONE,
+                                      .dataSize = (uint32_t)data.size(),
+                                      .kind = INCFS_BLOCK_KIND_HASH,
+                                      .data = data.data(),
+                              },
+                              {
+                                      .fileFd = wfd,
+                                      .pageIndex = 2,
+                                      .compression = INCFS_COMPRESSION_KIND_NONE,
+                                      .dataSize = (uint32_t)data.size(),
+                                      .kind = INCFS_BLOCK_KIND_HASH,
+                                      .data = data.data(),
+                              }};
+        ASSERT_EQ((int)std::size(blocks), writeBlocks({blocks, std::size(blocks)}));
+    }
+
     std::string mount_dir_path_;
     std::optional<TemporaryDir> tmp_dir_for_mount_;
     std::string image_dir_path_;
@@ -163,6 +249,12 @@ TEST_F(IncFsTest, BindMount) {
 
 TEST_F(IncFsTest, Root) {
     ASSERT_EQ(mount_dir_path_, root(control_)) << "Error: " << errno;
+}
+
+TEST_F(IncFsTest, RootInvalidControl) {
+    const TemporaryFile tmp_file;
+    auto control{createControl(tmp_file.fd, -1, -1)};
+    ASSERT_EQ("", root(control)) << "Error: " << errno;
 }
 
 TEST_F(IncFsTest, Open) {
@@ -297,6 +389,7 @@ TEST_F(IncFsTest, WaitForPendingReads) {
         auto fd = openWrite(control_, fileId(1));
         ASSERT_GE(fd, 0);
 
+
         std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
         auto block = DataBlock{
                 .fileFd = fd,
@@ -314,4 +407,335 @@ TEST_F(IncFsTest, WaitForPendingReads) {
     char buf[INCFS_DATA_FILE_BLOCK_SIZE];
     ASSERT_TRUE(android::base::ReadFully(fd, buf, sizeof(buf)));
     wait_pending_read_thread.join();
+}
+
+TEST_F(IncFsTest, GetFilledRangesBad) {
+    EXPECT_EQ(-EBADF, IncFs_GetFilledRanges(-1, {}, nullptr));
+    EXPECT_EQ(-EINVAL, IncFs_GetFilledRanges(0, {}, nullptr));
+    EXPECT_EQ(-EINVAL, IncFs_GetFilledRangesStartingFrom(0, -1, {}, nullptr));
+}
+
+TEST_F(IncFsTest, GetFilledRanges) {
+    ASSERT_EQ(0,
+              makeFile(control_, mountPath(test_file_name_), 0555, fileId(1),
+                       {.size = 4 * INCFS_DATA_FILE_BLOCK_SIZE}));
+    char buffer[1024];
+    const auto bufferSpan = IncFsSpan{.data = buffer, .size = std::size(buffer)};
+
+    const android::base::unique_fd rfd(
+            open(mountPath(test_file_name_).c_str(), O_RDONLY | O_CLOEXEC | O_BINARY));
+    ASSERT_GE(rfd.get(), 0);
+
+    IncFsFilledRanges filledRanges;
+    EXPECT_EQ(0, IncFs_GetFilledRanges(rfd.get(), IncFsSpan{}, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRanges(rfd.get(), bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 0, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 1, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 30, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(-ENODATA, IncFs_IsFullyLoaded(rfd.get()));
+
+    auto wfd = openWrite(control_, fileId(1));
+    ASSERT_GE(wfd, 0);
+
+    // write one block
+    std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
+    auto block = DataBlock{
+            .fileFd = wfd,
+            .pageIndex = 0,
+            .compression = INCFS_COMPRESSION_KIND_NONE,
+            .dataSize = (uint32_t)data.size(),
+            .data = data.data(),
+    };
+    ASSERT_EQ(1, writeBlocks({&block, 1}));
+
+    EXPECT_EQ(0, IncFs_GetFilledRanges(rfd.get(), bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(1, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 0, bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(1, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 1, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 30, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(-ENODATA, IncFs_IsFullyLoaded(rfd.get()));
+
+    // append one more block next to the first one
+    block.pageIndex = 1;
+    ASSERT_EQ(1, writeBlocks({&block, 1}));
+
+    EXPECT_EQ(0, IncFs_GetFilledRanges(rfd.get(), bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(2, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 0, bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(2, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 1, bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(1, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(2, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 30, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(-ENODATA, IncFs_IsFullyLoaded(rfd.get()));
+
+    // now create a gap between filled blocks
+    block.pageIndex = 3;
+    ASSERT_EQ(1, writeBlocks({&block, 1}));
+
+    EXPECT_EQ(0, IncFs_GetFilledRanges(rfd.get(), bufferSpan, &filledRanges));
+    ASSERT_EQ(2, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(2, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(3, filledRanges.dataRanges[1].begin);
+    EXPECT_EQ(4, filledRanges.dataRanges[1].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 0, bufferSpan, &filledRanges));
+    ASSERT_EQ(2, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(2, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(3, filledRanges.dataRanges[1].begin);
+    EXPECT_EQ(4, filledRanges.dataRanges[1].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 1, bufferSpan, &filledRanges));
+    ASSERT_EQ(2, filledRanges.dataRangesCount);
+    EXPECT_EQ(1, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(2, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(3, filledRanges.dataRanges[1].begin);
+    EXPECT_EQ(4, filledRanges.dataRanges[1].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 2, bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(3, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(4, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 30, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(-ENODATA, IncFs_IsFullyLoaded(rfd.get()));
+
+    // at last fill the whole file and make sure we report it as having a single range
+    block.pageIndex = 2;
+    ASSERT_EQ(1, writeBlocks({&block, 1}));
+
+    EXPECT_EQ(0, IncFs_GetFilledRanges(rfd.get(), bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(4, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 0, bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(4, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 1, bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(1, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(4, filledRanges.dataRanges[0].end);
+
+    EXPECT_EQ(0, IncFs_GetFilledRangesStartingFrom(rfd.get(), 30, bufferSpan, &filledRanges));
+    EXPECT_EQ(0, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+
+    EXPECT_EQ(0, IncFs_IsFullyLoaded(rfd.get()));
+}
+
+TEST_F(IncFsTest, GetFilledRangesSmallBuffer) {
+    ASSERT_EQ(0,
+              makeFile(control_, mountPath(test_file_name_), 0555, fileId(1),
+                       {.size = 5 * INCFS_DATA_FILE_BLOCK_SIZE}));
+    char buffer[1024];
+
+    const android::base::unique_fd rfd(
+            open(mountPath(test_file_name_).c_str(), O_RDONLY | O_CLOEXEC | O_BINARY));
+    ASSERT_GE(rfd.get(), 0);
+
+    auto wfd = openWrite(control_, fileId(1));
+    ASSERT_GE(wfd, 0);
+
+    std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
+    DataBlock blocks[] = {DataBlock{
+                                  .fileFd = wfd,
+                                  .pageIndex = 0,
+                                  .compression = INCFS_COMPRESSION_KIND_NONE,
+                                  .dataSize = (uint32_t)data.size(),
+                                  .data = data.data(),
+                          },
+                          DataBlock{
+                                  .fileFd = wfd,
+                                  .pageIndex = 2,
+                                  .compression = INCFS_COMPRESSION_KIND_NONE,
+                                  .dataSize = (uint32_t)data.size(),
+                                  .data = data.data(),
+                          },
+                          DataBlock{
+                                  .fileFd = wfd,
+                                  .pageIndex = 4,
+                                  .compression = INCFS_COMPRESSION_KIND_NONE,
+                                  .dataSize = (uint32_t)data.size(),
+                                  .data = data.data(),
+                          }};
+    ASSERT_EQ(3, writeBlocks({blocks, 3}));
+
+    IncFsSpan bufferSpan = {.data = buffer, .size = sizeof(IncFsBlockRange)};
+    IncFsFilledRanges filledRanges;
+    EXPECT_EQ(-ERANGE, IncFs_GetFilledRanges(rfd.get(), bufferSpan, &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(0, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(1, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+    EXPECT_EQ(2, filledRanges.endIndex);
+
+    EXPECT_EQ(-ERANGE,
+              IncFs_GetFilledRangesStartingFrom(rfd.get(), filledRanges.endIndex, bufferSpan,
+                                                &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(2, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(3, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+    EXPECT_EQ(4, filledRanges.endIndex);
+
+    EXPECT_EQ(0,
+              IncFs_GetFilledRangesStartingFrom(rfd.get(), filledRanges.endIndex, bufferSpan,
+                                                &filledRanges));
+    ASSERT_EQ(1, filledRanges.dataRangesCount);
+    EXPECT_EQ(4, filledRanges.dataRanges[0].begin);
+    EXPECT_EQ(5, filledRanges.dataRanges[0].end);
+    EXPECT_EQ(0, filledRanges.hashRangesCount);
+    EXPECT_EQ(5, filledRanges.endIndex);
+}
+
+TEST_F(IncFsTest, GetFilledRangesWithHashes) {
+    auto size = makeFileWithHash(1);
+    ASSERT_GT(size, 0);
+    ASSERT_NO_FATAL_FAILURE(writeTestRanges(1, size));
+
+    const android::base::unique_fd rfd(
+            open(mountPath(test_file_name_).c_str(), O_RDONLY | O_CLOEXEC | O_BINARY));
+    ASSERT_GE(rfd.get(), 0);
+
+    char buffer[1024];
+    IncFsSpan bufferSpan = {.data = buffer, .size = sizeof(buffer)};
+    IncFsFilledRanges filledRanges;
+    EXPECT_EQ(0, IncFs_GetFilledRanges(rfd.get(), bufferSpan, &filledRanges));
+    ASSERT_EQ(3, filledRanges.dataRangesCount);
+    auto lastPage = sizeToPages(size) - 1;
+    EXPECT_EQ(lastPage, filledRanges.dataRanges[2].begin);
+    EXPECT_EQ(lastPage + 1, filledRanges.dataRanges[2].end);
+    EXPECT_EQ(2, filledRanges.hashRangesCount);
+    EXPECT_EQ(0, filledRanges.hashRanges[0].begin);
+    EXPECT_EQ(1, filledRanges.hashRanges[0].end);
+    EXPECT_EQ(2, filledRanges.hashRanges[1].begin);
+    EXPECT_EQ(3, filledRanges.hashRanges[1].end);
+    EXPECT_EQ(sizeToPages(size) + 3, filledRanges.endIndex);
+}
+
+TEST_F(IncFsTest, GetFilledRangesCpp) {
+    auto size = makeFileWithHash(1);
+    ASSERT_GT(size, 0);
+    ASSERT_NO_FATAL_FAILURE(writeTestRanges(1, size));
+
+    const android::base::unique_fd rfd(
+            open(mountPath(test_file_name_).c_str(), O_RDONLY | O_CLOEXEC | O_BINARY));
+    ASSERT_GE(rfd.get(), 0);
+
+    // simply get all ranges
+    auto [res, ranges] = getFilledRanges(rfd.get());
+    EXPECT_EQ(res, 0);
+    EXPECT_EQ(size_t(5), ranges.totalSize());
+    ASSERT_EQ(size_t(3), ranges.dataRanges().size());
+    auto lastPage = sizeToPages(size) - 1;
+    EXPECT_EQ(lastPage, ranges.dataRanges()[2].begin);
+    EXPECT_EQ(size_t(1), ranges.dataRanges()[2].size());
+    ASSERT_EQ(size_t(2), ranges.hashRanges().size());
+    EXPECT_EQ(0, ranges.hashRanges()[0].begin);
+    EXPECT_EQ(size_t(1), ranges.hashRanges()[0].size());
+    EXPECT_EQ(2, ranges.hashRanges()[1].begin);
+    EXPECT_EQ(size_t(1), ranges.hashRanges()[1].size());
+
+    // now check how buffer size limiting works.
+    FilledRanges::RangeBuffer buf(ranges.totalSize() - 1);
+    auto [res2, ranges2] = getFilledRanges(rfd.get(), std::move(buf));
+    ASSERT_EQ(-ERANGE, res2);
+    EXPECT_EQ(ranges.totalSize() - 1, ranges2.totalSize());
+    ASSERT_EQ(size_t(3), ranges2.dataRanges().size());
+    ASSERT_EQ(size_t(1), ranges2.hashRanges().size());
+    EXPECT_EQ(0, ranges2.hashRanges()[0].begin);
+    EXPECT_EQ(size_t(1), ranges2.hashRanges()[0].size());
+
+    // and now check the resumption from the previous result
+    auto [res3, ranges3] = getFilledRanges(rfd.get(), std::move(ranges2));
+    ASSERT_EQ(0, res3);
+    EXPECT_EQ(ranges.totalSize(), ranges3.totalSize());
+    ASSERT_EQ(size_t(3), ranges3.dataRanges().size());
+    ASSERT_EQ(size_t(2), ranges3.hashRanges().size());
+    EXPECT_EQ(0, ranges3.hashRanges()[0].begin);
+    EXPECT_EQ(size_t(1), ranges3.hashRanges()[0].size());
+    EXPECT_EQ(2, ranges3.hashRanges()[1].begin);
+    EXPECT_EQ(size_t(1), ranges3.hashRanges()[1].size());
+
+    EXPECT_EQ(LoadingState::MissingBlocks, isFullyLoaded(rfd.get()));
+
+    {
+        auto wfd = openWrite(control_, fileId(1));
+        ASSERT_GE(wfd, 0);
+
+        std::vector<char> data(INCFS_DATA_FILE_BLOCK_SIZE);
+        DataBlock block = {.fileFd = wfd,
+                           .pageIndex = 1,
+                           .compression = INCFS_COMPRESSION_KIND_NONE,
+                           .dataSize = (uint32_t)data.size(),
+                           .data = data.data()};
+        for (auto i = 0; i != sizeToPages(size); ++i) {
+            block.pageIndex = i;
+            ASSERT_EQ(1, writeBlocks({&block, 1}));
+        }
+        block.kind = INCFS_BLOCK_KIND_HASH;
+        for (auto i = 0; i != 3; ++i) {
+            block.pageIndex = i;
+            ASSERT_EQ(1, writeBlocks({&block, 1}));
+        }
+    }
+    EXPECT_EQ(LoadingState::Full, isFullyLoaded(rfd.get()));
 }
