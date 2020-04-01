@@ -376,7 +376,9 @@ public:
                                    offsetBytes, lengthBytes, incomingFd);
     }
 
-    int openWrite(FileId fid) const { return android::incfs::openWrite(mControl, fid); }
+    android::incfs::UniqueFd openForSpecialOps(FileId fid) const {
+        return android::incfs::openForSpecialOps(mControl, fid);
+    }
 
     int writeBlocks(Span<const IncFsDataBlock> blocks) const {
         return android::incfs::writeBlocks(blocks);
@@ -555,10 +557,10 @@ void DataLoader_FilesystemConnector_writeData(DataLoaderFilesystemConnectorPtr i
     return connector->writeData(name, offsetBytes, lengthBytes, incomingFd);
 }
 
-int DataLoader_FilesystemConnector_openWrite(DataLoaderFilesystemConnectorPtr ifs,
-                                             IncFsFileId fid) {
+int DataLoader_FilesystemConnector_openForSpecialOps(DataLoaderFilesystemConnectorPtr ifs,
+                                                     IncFsFileId fid) {
     auto connector = static_cast<DataLoaderConnector*>(ifs);
-    return connector->openWrite(fid);
+    return connector->openForSpecialOps(fid).release();
 }
 
 int DataLoader_FilesystemConnector_writeBlocks(DataLoaderFilesystemConnectorPtr ifs,

@@ -190,8 +190,8 @@ IncFsErrorCode IncFs_WaitForPendingReads(const IncFsControl* control, int32_t ti
 IncFsErrorCode IncFs_WaitForPageReads(const IncFsControl* control, int32_t timeoutMs,
                                       IncFsReadInfo buffer[], size_t* bufferSize);
 
-IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path);
-IncFsFd IncFs_OpenWriteById(const IncFsControl* control, IncFsFileId id);
+IncFsFd IncFs_OpenForSpecialOpsByPath(const IncFsControl* control, const char* path);
+IncFsFd IncFs_OpenForSpecialOpsById(const IncFsControl* control, IncFsFileId id);
 
 IncFsErrorCode IncFs_WriteBlocks(const IncFsDataBlock blocks[], size_t blocksCount);
 

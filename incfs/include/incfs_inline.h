@@ -95,8 +95,9 @@ inline IncFsFileId toFileId(std::string_view str) {
     return IncFs_FileIdFromString(str.data());
 }
 
-inline UniqueControl::~UniqueControl() {
+inline void UniqueControl::close() {
     IncFs_DeleteControl(mControl);
+    mControl = nullptr;
 }
 
 inline IncFsFd UniqueControl::cmd() const {
@@ -250,11 +251,11 @@ inline WaitResult waitForPageReads(const Control& control, std::chrono::millisec
     return WaitResult(err);
 }
 
-inline int openWrite(const Control& control, FileId fileId) {
-    return IncFs_OpenWriteById(control, fileId);
+inline UniqueFd openForSpecialOps(const Control& control, FileId fileId) {
+    return UniqueFd(IncFs_OpenForSpecialOpsById(control, fileId));
 }
-inline int openWrite(const Control& control, std::string_view path) {
-    return IncFs_OpenWriteByPath(control, details::c_str(path));
+inline UniqueFd openForSpecialOps(const Control& control, std::string_view path) {
+    return UniqueFd(IncFs_OpenForSpecialOpsByPath(control, details::c_str(path)));
 }
 
 inline ErrorCode writeBlocks(Span<const DataBlock> blocks) {

@@ -305,17 +305,23 @@ static std::string makeMountOptionsString(IncFsMountOptions options) {
 }
 
 static IncFsControl* makeControl(const char* root) {
-    int cmd = openCmd(root).release();
-    if (cmd < 0) {
+    auto cmd = openCmd(root);
+    if (!cmd.ok()) {
         return nullptr;
     }
-    int pendingReads = openPendingReads(root).release();
-    if (pendingReads < 0) {
+    auto pendingReads = openPendingReads(root);
+    if (!pendingReads.ok()) {
         return nullptr;
     }
-    int logs = openLog(root).release();
+    auto logs = openLog(root);
     // logs may be absent, that's fine
-    return IncFs_CreateControl(cmd, pendingReads, logs);
+    auto control = IncFs_CreateControl(cmd.get(), pendingReads.get(), logs.get());
+    if (control) {
+        (void)cmd.release();
+        (void)pendingReads.release();
+        (void)logs.release();
+    }
+    return control;
 }
 
 static std::string makeCommandPath(std::string_view root, std::string_view item) {
@@ -910,7 +916,7 @@ IncFsErrorCode IncFs_WaitForPageReads(const IncFsControl* control, int32_t timeo
     return 0;
 }
 
-static IncFsFd openWrite(int cmd, const char* path) {
+static IncFsFd openForSpecialOps(int cmd, const char* path) {
     ab::unique_fd fd(::open(path, O_RDONLY | O_CLOEXEC));
     if (fd < 0) {
         return -errno;
@@ -923,24 +929,24 @@ static IncFsFd openWrite(int cmd, const char* path) {
     return fd.release();
 }
 
-IncFsFd IncFs_OpenWriteByPath(const IncFsControl* control, const char* path) {
+IncFsFd IncFs_OpenForSpecialOpsByPath(const IncFsControl* control, const char* path) {
     const auto pathRoot = registry().rootFor(path);
     const auto cmd = IncFs_GetControlFd(control, CMD);
     const auto root = rootForCmd(cmd);
     if (root.empty() || root != pathRoot) {
         return -EINVAL;
     }
-    return openWrite(cmd, makeCommandPath(root, path).c_str());
+    return openForSpecialOps(cmd, makeCommandPath(root, path).c_str());
 }
 
-IncFsFd IncFs_OpenWriteById(const IncFsControl* control, IncFsFileId id) {
+IncFsFd IncFs_OpenForSpecialOpsById(const IncFsControl* control, IncFsFileId id) {
     const auto cmd = IncFs_GetControlFd(control, CMD);
     const auto root = rootForCmd(cmd);
     if (root.empty()) {
         return -EINVAL;
     }
     auto name = path::join(root, kIndexDir, toStringImpl(id));
-    return openWrite(cmd, makeCommandPath(root, name).c_str());
+    return openForSpecialOps(cmd, makeCommandPath(root, name).c_str());
 }
 
 static int writeBlocks(int fd, const incfs_fill_block blocks[], int blocksCount) {
@@ -1089,7 +1095,7 @@ IncFsErrorCode IncFs_GetFilledRangesStartingFrom(int fd, int startBlockIndex, In
 
     auto outPtr = outStart;
     int error = 0;
-    int totalBlocks;
+    int dataBlocks;
     incfs_get_filled_blocks_args args = {};
     for (;;) {
         auto start = args.index_out ? args.index_out : startBlockIndex;
@@ -1105,7 +1111,7 @@ IncFsErrorCode IncFs_GetFilledRangesStartingFrom(int fd, int startBlockIndex, In
             return -error;
         }
 
-        totalBlocks = args.total_blocks_out;
+        dataBlocks = args.data_blocks_out;
         outPtr += args.range_buffer_size_out / sizeof(incfs_filled_range);
         if (!res || error == ERANGE) {
             break;
@@ -1121,15 +1127,7 @@ IncFsErrorCode IncFs_GetFilledRangesStartingFrom(int fd, int startBlockIndex, In
     filledRanges->endIndex = args.index_out;
     auto hashStartPtr = outPtr;
     if (outPtr != outStart) {
-        // need to know the file size to be able to split the hash blocks from data.
-        struct stat st;
-        if (::fstat(fd, &st)) {
-            return -errno;
-        }
-        const auto dataBlocks =
-                (st.st_size + INCFS_DATA_FILE_BLOCK_SIZE - 1) / INCFS_DATA_FILE_BLOCK_SIZE;
-
-        // now figure out the ranges for data block and hash blocks in the output
+        // figure out the ranges for data block and hash blocks in the output
         for (; hashStartPtr != outStart; --hashStartPtr) {
             if ((hashStartPtr - 1)->begin < dataBlocks) {
                 break;
