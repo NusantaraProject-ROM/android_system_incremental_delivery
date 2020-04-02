@@ -83,6 +83,8 @@ struct JniIds {
     jfieldID installationFileLengthBytes;
     jfieldID installationFileMetadata;
 
+    jmethodID dataLoaderServiceSetStorageParams;
+
     JniIds(JNIEnv* env) {
         listener = (jclass)env->NewGlobalRef(
                 FindClassOrDie(env, "android/content/pm/IDataLoaderStatusListener"));
@@ -174,6 +176,11 @@ struct JniIds {
                 GetFieldIDOrDie(env, installationFileParcel, "name", "Ljava/lang/String;");
         installationFileLengthBytes = GetFieldIDOrDie(env, installationFileParcel, "size", "J");
         installationFileMetadata = GetFieldIDOrDie(env, installationFileParcel, "metadata", "[B");
+
+        auto dataLoaderService =
+                FindClassOrDie(env, "android/service/dataloader/DataLoaderService");
+        dataLoaderServiceSetStorageParams =
+                GetMethodIDOrDie(env, dataLoaderService, "setStorageParams", "(IZ)Z");
     }
 };
 
@@ -372,8 +379,8 @@ public:
         CHECK(mDataLoader);
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         const auto& jni = jniIds(env);
-        return env->CallVoidMethod(mCallbackControl, jni.callbackControlWriteData, name,
-                                   offsetBytes, lengthBytes, incomingFd);
+        env->CallVoidMethod(mCallbackControl, jni.callbackControlWriteData, name, offsetBytes,
+                            lengthBytes, incomingFd);
     }
 
     android::incfs::UniqueFd openForSpecialOps(FileId fid) const {
@@ -388,6 +395,17 @@ public:
         return IncFs_GetMetadataById(mControl, fid, buffer, bufferSize);
     }
 
+    bool setParams(DataLoaderFilesystemParams params) const {
+        JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
+        const auto& jni = jniIds(env);
+        bool result = env->CallBooleanMethod(mService, jni.dataLoaderServiceSetStorageParams,
+                                             mStorageId, params.readLogsEnabled);
+        if (checkAndClearJavaException(__func__)) {
+            return false;
+        }
+        return result;
+    }
+
     bool reportStatus(DataLoaderStatus status) {
         if (status < DATA_LOADER_FIRST_STATUS || DATA_LOADER_LAST_STATUS < status) {
             ALOGE("Unable to report invalid status. status=%d", status);
@@ -397,7 +415,7 @@ public:
         return reportStatusViaCallback(env, mListener, mStorageId, status);
     }
 
-    bool checkAndClearJavaException(std::string_view method) {
+    bool checkAndClearJavaException(std::string_view method) const {
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
 
         if (!env->ExceptionCheck()) {
@@ -574,6 +592,12 @@ int DataLoader_FilesystemConnector_getRawMetadata(DataLoaderFilesystemConnectorP
                                                   size_t* bufferSize) {
     auto connector = static_cast<DataLoaderConnector*>(ifs);
     return connector->getRawMetadata(fid, buffer, bufferSize);
+}
+
+bool DataLoader_FilesystemConnector_setParams(DataLoaderFilesystemConnectorPtr ifs,
+                                              DataLoaderFilesystemParams params) {
+    auto connector = static_cast<DataLoaderConnector*>(ifs);
+    return connector->setParams(params);
 }
 
 int DataLoader_StatusListener_reportStatus(DataLoaderStatusListenerPtr listener,

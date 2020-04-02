@@ -110,6 +110,7 @@ struct FilesystemConnector : public DataLoaderFilesystemConnector {
     android::incfs::UniqueFd openForSpecialOps(FileId fid);
     int writeBlocks(DataBlocks blocks);
     RawMetadata getRawMetadata(FileId fid);
+    bool setParams(DataLoaderFilesystemParams);
 };
 
 struct StatusListener : public DataLoaderStatusListener {
