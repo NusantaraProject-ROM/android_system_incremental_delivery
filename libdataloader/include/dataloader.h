@@ -107,8 +107,7 @@ private:
 };
 
 struct FilesystemConnector : public DataLoaderFilesystemConnector {
-    // Returns a file descriptor that needs to be closed.
-    int openWrite(FileId fid);
+    android::incfs::UniqueFd openForSpecialOps(FileId fid);
     int writeBlocks(DataBlocks blocks);
     RawMetadata getRawMetadata(FileId fid);
 };

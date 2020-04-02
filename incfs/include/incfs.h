@@ -56,21 +56,21 @@ enum class BlockKind {
 
 class UniqueControl {
 public:
-    UniqueControl() : mControl(nullptr) {}
-    UniqueControl(IncFsControl* control) : mControl(control) {}
-    ~UniqueControl();
+    UniqueControl(IncFsControl* control = nullptr) : mControl(control) {}
+    ~UniqueControl() { close(); }
+    UniqueControl(UniqueControl&& other) noexcept
+          : mControl(std::exchange(other.mControl, nullptr)) {}
+    UniqueControl& operator=(UniqueControl&& other) {
+        close();
+        mControl = std::exchange(other.mControl, nullptr);
+        return *this;
+    }
+
     IncFsFd cmd() const;
     IncFsFd pendingReads() const;
     IncFsFd logs() const;
     operator IncFsControl*() const { return mControl; };
-    UniqueControl(UniqueControl&& other) noexcept {
-        mControl = std::exchange(other.mControl, nullptr);
-    }
-    UniqueControl& operator=(UniqueControl&& other) {
-        this->~UniqueControl();
-        new (this) UniqueControl(std::move(other));
-        return *this;
-    }
+    void close();
 
 private:
     IncFsControl* mControl;
@@ -137,6 +137,32 @@ private:
     IncFsFilledRanges rawFilledRanges_;
 };
 
+class UniqueFd {
+public:
+    explicit UniqueFd(int fd) : fd_(fd) {}
+    UniqueFd() : UniqueFd(-1) {}
+    ~UniqueFd() { close(); }
+    UniqueFd(UniqueFd&& other) : fd_(other.release()) {}
+    UniqueFd& operator=(UniqueFd&& other) {
+        close();
+        fd_ = other.release();
+        return *this;
+    }
+
+    void close() {
+        if (ok()) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+    bool ok() const { return fd_ >= 0; }
+    int get() const { return fd_; }
+    [[nodiscard]] int release() { return std::exchange(fd_, -1); }
+
+private:
+    int fd_;
+};
+
 using Control = UniqueControl;
 
 using FileId = IncFsFileId;
@@ -195,10 +221,8 @@ WaitResult waitForPendingReads(const Control& control, std::chrono::milliseconds
 WaitResult waitForPageReads(const Control& control, std::chrono::milliseconds timeout,
                             std::vector<ReadInfo>* pageReadsBuffer);
 
-// Returns a file descriptor that needs to be closed.
-int openWrite(const Control& control, FileId fileId);
-// Returns a file descriptor that needs to be closed.
-int openWrite(const Control& control, std::string_view path);
+UniqueFd openForSpecialOps(const Control& control, FileId fileId);
+UniqueFd openForSpecialOps(const Control& control, std::string_view path);
 ErrorCode writeBlocks(Span<const DataBlock> blocks);
 
 std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd);
@@ -206,7 +230,6 @@ std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd, FilledRanges::RangeBu
 std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd, FilledRanges&& resumeFrom);
 
 enum class LoadingState { Full, MissingBlocks };
-
 LoadingState isFullyLoaded(int fd);
 
 } // namespace android::incfs
