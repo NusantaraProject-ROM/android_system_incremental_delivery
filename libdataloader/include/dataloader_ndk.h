@@ -58,6 +58,10 @@ typedef struct {
     IncFsSpan metadata;
 } DataLoaderInstallationFile;
 
+typedef struct {
+    bool readLogsEnabled;
+} DataLoaderFilesystemParams;
+
 #ifdef __cplusplus
 
 typedef class DataLoaderFilesystemConnector {
@@ -111,6 +115,9 @@ int DataLoader_FilesystemConnector_writeBlocks(DataLoaderFilesystemConnectorPtr,
 // INCFS_MAX_FILE_ATTR_SIZE
 int DataLoader_FilesystemConnector_getRawMetadata(DataLoaderFilesystemConnectorPtr, IncFsFileId fid,
                                                   char buffer[], size_t* bufferSize);
+
+bool DataLoader_FilesystemConnector_setParams(DataLoaderFilesystemConnectorPtr,
+                                              DataLoaderFilesystemParams params);
 
 int DataLoader_StatusListener_reportStatus(DataLoaderStatusListenerPtr listener,
                                            DataLoaderStatus status);
