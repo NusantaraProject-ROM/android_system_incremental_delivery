@@ -49,7 +49,6 @@ cc_library_headers {
 cc_test {
     name: "libincfs-test",
     defaults: ["libincfs_defaults"],
-    cflags: ["-Werror", "-Wall", "-Wextra"],
     static_libs: [
         "libincfs",
     ],
@@ -61,4 +60,29 @@ cc_test {
         "tests/MountRegistry_test.cpp",
     ],
     require_root: true,
+}
+
+cc_binary {
+    name: "incfsdump",
+    defaults: ["libincfs_defaults"],
+    static_libs: [
+        "libbase",
+    ],
+    srcs: [
+        "incfsdump/main.cpp",
+        "incfsdump/dump.cpp",
+    ],
+}
+
+cc_binary_host {
+    name: "incfsdump-host",
+    stem: "incfsdump",
+    defaults: ["libincfs_defaults"],
+    static_libs: [
+        "libbase",
+    ],
+    srcs: [
+        "incfsdump/main.cpp",
+        "incfsdump/dump.cpp",
+    ],
 }
