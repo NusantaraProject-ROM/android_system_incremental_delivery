@@ -184,6 +184,14 @@ struct JniIds {
     }
 };
 
+JavaVM* getJavaVM(JNIEnv* env) {
+    CHECK(env);
+    JavaVM* jvm = nullptr;
+    env->GetJavaVM(&jvm);
+    CHECK(jvm);
+    return jvm;
+}
+
 const JniIds& jniIds(JNIEnv* env) {
     static const JniIds ids(env);
     return ids;
@@ -273,12 +281,12 @@ class DataLoaderConnector : public FilesystemConnector, public StatusListener {
 public:
     DataLoaderConnector(JNIEnv* env, jobject service, jint storageId, UniqueControl control,
                         jobject callbackControl, jobject listener)
-          : mService(env->NewGlobalRef(service)),
+          : mJvm(getJavaVM(env)),
+            mService(env->NewGlobalRef(service)),
             mCallbackControl(env->NewGlobalRef(callbackControl)),
             mListener(env->NewGlobalRef(listener)),
             mStorageId(storageId),
             mControl(std::move(control)) {
-        env->GetJavaVM(&mJvm);
         CHECK(mJvm != nullptr);
     }
     DataLoaderConnector(const DataLoaderConnector&) = delete;
@@ -325,10 +333,17 @@ public:
         if (checkAndClearJavaException(__func__)) {
             result = false;
         }
+        mRunning = result;
         return result;
     }
     void onStop() {
         CHECK(mDataLoader);
+
+        // Stopping both loopers and waiting for them to exit.
+        mRunning = false;
+        std::lock_guard{mCmdLooperBusy};
+        std::lock_guard{mLogLooperBusy};
+
         mDataLoader->onStop(mDataLoader);
         checkAndClearJavaException(__func__);
     }
@@ -350,7 +365,8 @@ public:
 
     int onCmdLooperEvent(std::vector<ReadInfo>& pendingReads) {
         CHECK(mDataLoader);
-        while (true) {
+        std::lock_guard lock{mCmdLooperBusy};
+        while (mRunning.load(std::memory_order_relaxed)) {
             pendingReads.resize(kPendingReadsBufferSize);
             if (android::incfs::waitForPendingReads(mControl, 0ms, &pendingReads) !=
                         android::incfs::WaitResult::HaveData ||
@@ -363,7 +379,8 @@ public:
     }
     int onLogLooperEvent(std::vector<ReadInfo>& pageReads) {
         CHECK(mDataLoader);
-        while (true) {
+        std::lock_guard lock{mLogLooperBusy};
+        while (mRunning.load(std::memory_order_relaxed)) {
             pageReads.clear();
             if (android::incfs::waitForPageReads(mControl, 0ms, &pageReads) !=
                         android::incfs::WaitResult::HaveData ||
@@ -432,14 +449,19 @@ public:
     jobject listener() const { return mListener; }
 
 private:
-    JavaVM* mJvm = nullptr;
+    JavaVM* const mJvm;
     jobject const mService;
     jobject const mCallbackControl;
     jobject const mListener;
 
+    jint const mStorageId;
+    UniqueControl const mControl;
+
     ::DataLoader* mDataLoader = nullptr;
-    const jint mStorageId;
-    const UniqueControl mControl;
+
+    std::mutex mCmdLooperBusy;
+    std::mutex mLogLooperBusy;
+    std::atomic<bool> mRunning{false};
 };
 
 static int onCmdLooperEvent(int fd, int events, void* data) {
