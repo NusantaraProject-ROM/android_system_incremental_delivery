@@ -344,10 +344,11 @@ public:
     void onStop() {
         CHECK(mDataLoader);
 
-        // Stopping both loopers and waiting for them to exit.
+        // Stopping both loopers and waiting for them to exit - we should be able to acquire/release
+        // both mutexes.
         mRunning = false;
-        std::lock_guard{mCmdLooperBusy};
-        std::lock_guard{mLogLooperBusy};
+        std::lock_guard{mCmdLooperBusy}; // NOLINT
+        std::lock_guard{mLogLooperBusy}; // NOLINT
 
         mDataLoader->onStop(mDataLoader);
         checkAndClearJavaException(__func__);
