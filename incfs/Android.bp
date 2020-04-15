@@ -65,19 +65,7 @@ cc_test {
 cc_binary {
     name: "incfsdump",
     defaults: ["libincfs_defaults"],
-    static_libs: [
-        "libbase",
-    ],
-    srcs: [
-        "incfsdump/main.cpp",
-        "incfsdump/dump.cpp",
-    ],
-}
-
-cc_binary_host {
-    name: "incfsdump-host",
-    stem: "incfsdump",
-    defaults: ["libincfs_defaults"],
+    host_supported: true,
     static_libs: [
         "libbase",
     ],
