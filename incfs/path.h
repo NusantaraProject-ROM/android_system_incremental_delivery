@@ -57,6 +57,7 @@ std::pair<std::string_view, std::string_view> splitDirBase(std::string& full);
 
 int isEmptyDir(std::string_view dir);
 bool startsWith(std::string_view path, std::string_view prefix);
+bool endsWith(std::string_view path, std::string_view prefix);
 
 inline auto openDir(const char* path) {
     auto dir = std::unique_ptr<DIR, decltype(&closedir)>(::opendir(path), &::closedir);

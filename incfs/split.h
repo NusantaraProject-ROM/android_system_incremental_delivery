@@ -27,7 +27,7 @@ namespace android::incfs {
 // |delimiters| can either be a list of delimiters in something string-like
 // or a single character (which is more efficient).
 //
-// The empty string is not a valid delimiter.
+// An empty string is not a valid delimiter.
 //
 template <class Callback, class Separator>
 void Split(std::string_view s, Separator delimiters, Callback&& onSplitCb) {
