@@ -16,6 +16,7 @@
 #define LOG_TAG "incfs-dataloaderconnector"
 
 #include <android-base/logging.h>
+#include <fcntl.h>
 #include <nativehelper/JNIHelp.h>
 #include <sys/stat.h>
 #include <utils/Looper.h>
@@ -501,7 +502,7 @@ static int createFdFromManaged(JNIEnv* env, jobject pfd) {
 
     const auto& jni = jniIds(env);
     auto managedFd = env->CallObjectMethod(pfd, jni.parcelFileDescriptorGetFileDescriptor);
-    return dup(jniGetFDFromFileDescriptor(env, managedFd));
+    return fcntl(jniGetFDFromFileDescriptor(env, managedFd), F_DUPFD_CLOEXEC, 0);
 }
 
 static jobject createServiceConnector(JNIEnv* env, jobject managedControl) {
@@ -656,13 +657,13 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
         }
     }
     auto nativeControl = createIncFsControlFromManaged(env, control);
-    ALOGE("DataLoader::create1 cmd: %d/%s", nativeControl.cmd(),
+    ALOGI("DataLoader::create1 cmd: %d|%s", nativeControl.cmd(),
           pathFromFd(nativeControl.cmd()).c_str());
-    ALOGE("DataLoader::create1 log: %d/%s", nativeControl.logs(),
+    ALOGI("DataLoader::create1 log: %d|%s", nativeControl.logs(),
           pathFromFd(nativeControl.logs()).c_str());
 
     auto nativeParams = DataLoaderParamsPair::createFromManaged(env, params);
-    ALOGE("DataLoader::create2: %d/%s/%s/%s", nativeParams.dataLoaderParams().type(),
+    ALOGI("DataLoader::create2: %d|%s|%s|%s", nativeParams.dataLoaderParams().type(),
           nativeParams.dataLoaderParams().packageName().c_str(),
           nativeParams.dataLoaderParams().className().c_str(),
           nativeParams.dataLoaderParams().arguments().c_str());

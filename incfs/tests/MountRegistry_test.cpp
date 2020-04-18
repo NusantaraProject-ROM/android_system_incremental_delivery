@@ -35,17 +35,13 @@ protected:
     virtual void SetUp() {}
     virtual void TearDown() {}
 
-    MountRegistry registry_{"dummyfs-bad-name"};
+    MountRegistry::Mounts mounts_;
 
-    MountRegistry& r() { return registry_; }
+    MountRegistry::Mounts& r() { return mounts_; }
 };
 
-TEST_F(MountRegistryTest, Default) {
-    ASSERT_EQ(size_t(0), r().roots().size());
-}
-
 TEST_F(MountRegistryTest, RootForRoot) {
-    r().addRoot("/root");
+    r().addRoot("/root", "/backing");
     ASSERT_STREQ("/root", r().rootFor("/root").data());
     ASSERT_STREQ("/root", r().rootFor("/root/1").data());
     ASSERT_STREQ("/root", r().rootFor("/root/1/2").data());
@@ -55,7 +51,7 @@ TEST_F(MountRegistryTest, RootForRoot) {
 }
 
 TEST_F(MountRegistryTest, OneBind) {
-    r().addRoot("/root");
+    r().addRoot("/root", "/backing");
     r().addBind("/root/1", "/bind");
     ASSERT_STREQ("/root", r().rootFor("/root").data());
     ASSERT_STREQ("/root", r().rootFor("/bind").data());
@@ -68,7 +64,7 @@ TEST_F(MountRegistryTest, OneBind) {
 }
 
 TEST_F(MountRegistryTest, MultiBind) {
-    r().addRoot("/root");
+    r().addRoot("/root", "/backing");
     r().addBind("/root/1", "/bind");
     r().addBind("/root/2/3", "/bind2");
     r().addBind("/root/2/3", "/other/bind");
