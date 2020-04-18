@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -155,8 +156,8 @@ public:
             fd_ = -1;
         }
     }
-    bool ok() const { return fd_ >= 0; }
     int get() const { return fd_; }
+    [[nodiscard]] bool ok() const { return fd_ >= 0; }
     [[nodiscard]] int release() { return std::exchange(fd_, -1); }
 
 private:
@@ -231,6 +232,10 @@ std::pair<ErrorCode, FilledRanges> getFilledRanges(int fd, FilledRanges&& resume
 
 enum class LoadingState { Full, MissingBlocks };
 LoadingState isFullyLoaded(int fd);
+
+// Some internal secret API as well that's not backed by C API yet.
+class MountRegistry;
+MountRegistry& defaultMountRegistry();
 
 } // namespace android::incfs
 

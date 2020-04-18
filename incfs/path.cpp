@@ -254,4 +254,11 @@ bool startsWith(std::string_view path, std::string_view prefix) {
     return path.size() == prefix.size() || path[prefix.size()] == '/';
 }
 
+bool endsWith(std::string_view path, std::string_view suffix) {
+    if (!path.ends_with(suffix)) {
+        return false;
+    }
+    return path.size() == suffix.size() || path[path.size() - suffix.size() - 1] == '/';
+}
+
 } // namespace android::incfs::path
