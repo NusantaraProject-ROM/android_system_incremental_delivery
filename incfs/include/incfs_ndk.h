@@ -167,6 +167,7 @@ IncFsErrorCode IncFs_Root(const IncFsControl* control, char buffer[], size_t* bu
 IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int32_t mode,
                               IncFsFileId id, IncFsNewFileParams params);
 IncFsErrorCode IncFs_MakeDir(const IncFsControl* control, const char* path, int32_t mode);
+IncFsErrorCode IncFs_MakeDirs(const IncFsControl* control, const char* path, int32_t mode);
 
 IncFsErrorCode IncFs_GetMetadataById(const IncFsControl* control, IncFsFileId id, char buffer[],
                                      size_t* bufferSize);

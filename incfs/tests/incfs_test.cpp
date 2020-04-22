@@ -220,8 +220,20 @@ TEST_F(IncFsTest, TrueIncfsPathForBindMount) {
 TEST_F(IncFsTest, MakeDir) {
     const auto dir_path = mountPath(test_dir_name_);
     ASSERT_FALSE(exists(dir_path));
-    ASSERT_GE(makeDir(control_, dir_path), 0);
+    ASSERT_EQ(makeDir(control_, dir_path), 0);
     ASSERT_TRUE(exists(dir_path));
+}
+
+TEST_F(IncFsTest, MakeDirs) {
+    const auto dir_path = mountPath(test_dir_name_);
+    ASSERT_FALSE(exists(dir_path));
+    ASSERT_EQ(makeDirs(control_, dir_path), 0);
+    ASSERT_TRUE(exists(dir_path));
+    ASSERT_EQ(makeDirs(control_, dir_path), 0);
+    auto nested = dir_path + "/couple/more/nested/levels";
+    ASSERT_EQ(makeDirs(control_, nested), 0);
+    ASSERT_TRUE(exists(nested));
+    ASSERT_NE(makeDirs(control_, "/"), 0);
 }
 
 TEST_F(IncFsTest, BindMount) {

@@ -204,6 +204,7 @@ std::string root(const Control& control);
 ErrorCode makeFile(const Control& control, std::string_view path, int mode, FileId fileId,
                    NewFileParams params);
 ErrorCode makeDir(const Control& control, std::string_view path, int mode = 0555);
+ErrorCode makeDirs(const Control& control, std::string_view path, int mode = 0555);
 
 RawMetadata getMetadata(const Control& control, FileId fileId);
 RawMetadata getMetadata(const Control& control, std::string_view path);

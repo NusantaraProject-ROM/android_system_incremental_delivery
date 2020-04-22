@@ -158,6 +158,9 @@ inline ErrorCode makeFile(const Control& control, std::string_view path, int mod
 inline ErrorCode makeDir(const Control& control, std::string_view path, int mode) {
     return IncFs_MakeDir(control, details::c_str(path), mode);
 }
+inline ErrorCode makeDirs(const Control& control, std::string_view path, int mode) {
+    return IncFs_MakeDirs(control, details::c_str(path), mode);
+}
 
 inline RawMetadata getMetadata(const Control& control, FileId fileId) {
     RawMetadata metadata(INCFS_MAX_FILE_ATTR_SIZE);
