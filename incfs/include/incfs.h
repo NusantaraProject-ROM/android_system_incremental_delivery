@@ -61,7 +61,7 @@ public:
     ~UniqueControl() { close(); }
     UniqueControl(UniqueControl&& other) noexcept
           : mControl(std::exchange(other.mControl, nullptr)) {}
-    UniqueControl& operator=(UniqueControl&& other) {
+    UniqueControl& operator=(UniqueControl&& other) noexcept {
         close();
         mControl = std::exchange(other.mControl, nullptr);
         return *this;
@@ -143,8 +143,8 @@ public:
     explicit UniqueFd(int fd) : fd_(fd) {}
     UniqueFd() : UniqueFd(-1) {}
     ~UniqueFd() { close(); }
-    UniqueFd(UniqueFd&& other) : fd_(other.release()) {}
-    UniqueFd& operator=(UniqueFd&& other) {
+    UniqueFd(UniqueFd&& other) noexcept : fd_(other.release()) {}
+    UniqueFd& operator=(UniqueFd&& other) noexcept {
         close();
         fd_ = other.release();
         return *this;
