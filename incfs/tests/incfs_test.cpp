@@ -217,6 +217,44 @@ TEST_F(IncFsTest, TrueIncfsPathForBindMount) {
     ASSERT_TRUE(isIncFsPath(tmp_dir_to_bind.path));
 }
 
+TEST_F(IncFsTest, Control) {
+    ASSERT_TRUE(control_);
+    EXPECT_GE(IncFs_GetControlFd(control_, CMD), 0);
+    EXPECT_GE(IncFs_GetControlFd(control_, PENDING_READS), 0);
+    EXPECT_GE(IncFs_GetControlFd(control_, LOGS), 0);
+
+    auto fds = control_.releaseFds();
+    EXPECT_GE(fds.size(), size_t(3));
+    EXPECT_GE(fds[0].get(), 0);
+    EXPECT_GE(fds[1].get(), 0);
+    EXPECT_GE(fds[2].get(), 0);
+    ASSERT_TRUE(control_);
+    EXPECT_LT(IncFs_GetControlFd(control_, CMD), 0);
+    EXPECT_LT(IncFs_GetControlFd(control_, PENDING_READS), 0);
+    EXPECT_LT(IncFs_GetControlFd(control_, LOGS), 0);
+
+    control_.close();
+    EXPECT_FALSE(control_);
+
+    auto control = IncFs_CreateControl(fds[0].release(), fds[1].release(), fds[2].release());
+    ASSERT_TRUE(control);
+    EXPECT_GE(IncFs_GetControlFd(control, CMD), 0);
+    EXPECT_GE(IncFs_GetControlFd(control, PENDING_READS), 0);
+    EXPECT_GE(IncFs_GetControlFd(control, LOGS), 0);
+    IncFsFd rawFds[3];
+    EXPECT_EQ(-EINVAL, IncFs_ReleaseControlFds(nullptr, rawFds, 3));
+    EXPECT_EQ(-EINVAL, IncFs_ReleaseControlFds(control, nullptr, 3));
+    EXPECT_EQ(-ERANGE, IncFs_ReleaseControlFds(control, rawFds, 2));
+    EXPECT_EQ(3, IncFs_ReleaseControlFds(control, rawFds, 3));
+    EXPECT_GE(rawFds[0], 0);
+    EXPECT_GE(rawFds[1], 0);
+    EXPECT_GE(rawFds[2], 0);
+    ::close(rawFds[0]);
+    ::close(rawFds[1]);
+    ::close(rawFds[2]);
+    IncFs_DeleteControl(control);
+}
+
 TEST_F(IncFsTest, MakeDir) {
     const auto dir_path = mountPath(test_dir_name_);
     ASSERT_FALSE(exists(dir_path));

@@ -112,6 +112,16 @@ inline IncFsFd UniqueControl::logs() const {
     return IncFs_GetControlFd(mControl, LOGS);
 }
 
+inline UniqueControl::Fds UniqueControl::releaseFds() {
+    Fds result;
+    IncFsFd fds[result.size()];
+    auto count = IncFs_ReleaseControlFds(mControl, fds, std::size(fds));
+    for (auto i = 0; i < count; ++i) {
+        result[i] = UniqueFd(fds[i]);
+    }
+    return result;
+}
+
 inline UniqueControl mount(std::string_view backingPath, std::string_view targetDir,
                            MountOptions options) {
     auto control = IncFs_Mount(details::c_str(backingPath), details::c_str(targetDir), options);

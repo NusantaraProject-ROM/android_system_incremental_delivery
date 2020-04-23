@@ -479,14 +479,31 @@ IncFsFd IncFs_GetControlFd(const IncFsControl* control, IncFsFdType type) {
     }
 }
 
+IncFsSize IncFs_ReleaseControlFds(IncFsControl* control, IncFsFd out[], IncFsSize outSize) {
+    if (!control || !out) {
+        return -EINVAL;
+    }
+    if (outSize < IncFsFdType::FDS_COUNT) {
+        return -ERANGE;
+    }
+    out[CMD] = std::exchange(control->cmd, -1);
+    out[PENDING_READS] = std::exchange(control->pendingReads, -1);
+    out[LOGS] = std::exchange(control->logs, -1);
+    return IncFsFdType::FDS_COUNT;
+}
+
 IncFsControl* IncFs_CreateControl(IncFsFd cmd, IncFsFd pendingReads, IncFsFd logs) {
     return new IncFsControl(cmd, pendingReads, logs);
 }
 
 void IncFs_DeleteControl(IncFsControl* control) {
     if (control) {
-        close(control->cmd);
-        close(control->pendingReads);
+        if (control->cmd >= 0) {
+            close(control->cmd);
+        }
+        if (control->pendingReads >= 0) {
+            close(control->pendingReads);
+        }
         if (control->logs >= 0) {
             close(control->logs);
         }

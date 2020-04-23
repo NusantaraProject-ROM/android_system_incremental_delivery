@@ -17,6 +17,7 @@
 
 #include <unistd.h>
 
+#include <array>
 #include <chrono>
 #include <functional>
 #include <string>
@@ -55,6 +56,32 @@ enum class BlockKind {
     hash = INCFS_BLOCK_KIND_HASH,
 };
 
+class UniqueFd {
+public:
+    explicit UniqueFd(int fd) : fd_(fd) {}
+    UniqueFd() : UniqueFd(-1) {}
+    ~UniqueFd() { close(); }
+    UniqueFd(UniqueFd&& other) noexcept : fd_(other.release()) {}
+    UniqueFd& operator=(UniqueFd&& other) noexcept {
+        close();
+        fd_ = other.release();
+        return *this;
+    }
+
+    void close() {
+        if (ok()) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+    int get() const { return fd_; }
+    [[nodiscard]] bool ok() const { return fd_ >= 0; }
+    [[nodiscard]] int release() { return std::exchange(fd_, -1); }
+
+private:
+    int fd_;
+};
+
 class UniqueControl {
 public:
     UniqueControl(IncFsControl* control = nullptr) : mControl(control) {}
@@ -72,6 +99,9 @@ public:
     IncFsFd logs() const;
     operator IncFsControl*() const { return mControl; };
     void close();
+
+    using Fds = std::array<UniqueFd, IncFsFdType::FDS_COUNT>;
+    [[nodiscard]] Fds releaseFds();
 
 private:
     IncFsControl* mControl;
@@ -136,32 +166,6 @@ public:
 private:
     RangeBuffer buffer_;
     IncFsFilledRanges rawFilledRanges_;
-};
-
-class UniqueFd {
-public:
-    explicit UniqueFd(int fd) : fd_(fd) {}
-    UniqueFd() : UniqueFd(-1) {}
-    ~UniqueFd() { close(); }
-    UniqueFd(UniqueFd&& other) noexcept : fd_(other.release()) {}
-    UniqueFd& operator=(UniqueFd&& other) noexcept {
-        close();
-        fd_ = other.release();
-        return *this;
-    }
-
-    void close() {
-        if (ok()) {
-            ::close(fd_);
-            fd_ = -1;
-        }
-    }
-    int get() const { return fd_; }
-    [[nodiscard]] bool ok() const { return fd_ >= 0; }
-    [[nodiscard]] int release() { return std::exchange(fd_, -1); }
-
-private:
-    int fd_;
 };
 
 using Control = UniqueControl;

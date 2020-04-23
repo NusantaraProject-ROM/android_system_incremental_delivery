@@ -61,6 +61,7 @@ typedef enum {
     CMD,
     PENDING_READS,
     LOGS,
+    FDS_COUNT,
 } IncFsFdType;
 
 typedef enum {
@@ -156,6 +157,7 @@ IncFsControl* IncFs_Open(const char* dir);
 IncFsControl* IncFs_CreateControl(IncFsFd cmd, IncFsFd pendingReads, IncFsFd logs);
 void IncFs_DeleteControl(IncFsControl* control);
 IncFsFd IncFs_GetControlFd(const IncFsControl* control, IncFsFdType type);
+IncFsSize IncFs_ReleaseControlFds(IncFsControl* control, IncFsFd out[], IncFsSize outSize);
 
 IncFsErrorCode IncFs_SetOptions(const IncFsControl* control, IncFsMountOptions options);
 
