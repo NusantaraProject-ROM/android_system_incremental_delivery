@@ -112,6 +112,16 @@ inline IncFsFd UniqueControl::logs() const {
     return IncFs_GetControlFd(mControl, LOGS);
 }
 
+inline UniqueControl::Fds UniqueControl::releaseFds() {
+    Fds result;
+    IncFsFd fds[result.size()];
+    auto count = IncFs_ReleaseControlFds(mControl, fds, std::size(fds));
+    for (auto i = 0; i < count; ++i) {
+        result[i] = UniqueFd(fds[i]);
+    }
+    return result;
+}
+
 inline UniqueControl mount(std::string_view backingPath, std::string_view targetDir,
                            MountOptions options) {
     auto control = IncFs_Mount(details::c_str(backingPath), details::c_str(targetDir), options);
@@ -157,6 +167,9 @@ inline ErrorCode makeFile(const Control& control, std::string_view path, int mod
 }
 inline ErrorCode makeDir(const Control& control, std::string_view path, int mode) {
     return IncFs_MakeDir(control, details::c_str(path), mode);
+}
+inline ErrorCode makeDirs(const Control& control, std::string_view path, int mode) {
+    return IncFs_MakeDirs(control, details::c_str(path), mode);
 }
 
 inline RawMetadata getMetadata(const Control& control, FileId fileId) {

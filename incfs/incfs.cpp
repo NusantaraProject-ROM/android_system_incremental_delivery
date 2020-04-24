@@ -479,14 +479,31 @@ IncFsFd IncFs_GetControlFd(const IncFsControl* control, IncFsFdType type) {
     }
 }
 
+IncFsSize IncFs_ReleaseControlFds(IncFsControl* control, IncFsFd out[], IncFsSize outSize) {
+    if (!control || !out) {
+        return -EINVAL;
+    }
+    if (outSize < IncFsFdType::FDS_COUNT) {
+        return -ERANGE;
+    }
+    out[CMD] = std::exchange(control->cmd, -1);
+    out[PENDING_READS] = std::exchange(control->pendingReads, -1);
+    out[LOGS] = std::exchange(control->logs, -1);
+    return IncFsFdType::FDS_COUNT;
+}
+
 IncFsControl* IncFs_CreateControl(IncFsFd cmd, IncFsFd pendingReads, IncFsFd logs) {
     return new IncFsControl(cmd, pendingReads, logs);
 }
 
 void IncFs_DeleteControl(IncFsControl* control) {
     if (control) {
-        close(control->cmd);
-        close(control->pendingReads);
+        if (control->cmd >= 0) {
+            close(control->cmd);
+        }
+        if (control->pendingReads >= 0) {
+            close(control->pendingReads);
+        }
         if (control->logs >= 0) {
             close(control->logs);
         }
@@ -664,11 +681,45 @@ IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int
     return 0;
 }
 
+static IncFsErrorCode makeDir(const char* commandPath, int32_t mode, bool allowExisting) {
+    if (!::mkdir(commandPath, mode)) {
+        if (::chmod(commandPath, mode)) {
+            PLOG(WARNING) << "[incfs] couldn't change the directory mode to 0" << std::oct << mode;
+        }
+        return 0;
+    }
+    // don't touch the existing dir's mode - mkdir(1) works that way.
+    return (allowExisting && errno == EEXIST) ? 0 : -errno;
+}
+
+static IncFsErrorCode makeDirs(std::string_view commandPath, std::string_view path,
+                               std::string_view root, int32_t mode) {
+    auto commandCPath = details::c_str(commandPath);
+    const auto mkdirRes = makeDir(commandCPath, mode, true);
+    if (!mkdirRes) {
+        return 0;
+    }
+    if (mkdirRes != -ENOENT) {
+        LOG(ERROR) << __func__ << "(): mkdir failed for " << path << " - " << mkdirRes;
+        return mkdirRes;
+    }
+
+    const auto parent = path::dirName(commandPath);
+    if (!path::startsWith(parent, root)) {
+        // went too far, already out of the root mount
+        return -EINVAL;
+    }
+
+    if (auto parentMkdirRes = makeDirs(parent, path::dirName(path), root, mode)) {
+        return parentMkdirRes;
+    }
+    return makeDir(commandCPath, mode, true);
+}
+
 IncFsErrorCode IncFs_MakeDir(const IncFsControl* control, const char* path, int32_t mode) {
     if (!control) {
         return -EINVAL;
     }
-
     const auto root = rootForCmd(control->cmd);
     if (root.empty()) {
         LOG(ERROR) << __func__ << "(): root is empty for " << path;
@@ -679,15 +730,28 @@ IncFsErrorCode IncFs_MakeDir(const IncFsControl* control, const char* path, int3
         LOG(ERROR) << __func__ << "(): commandPath is empty for " << path;
         return -EINVAL;
     }
-    if (::mkdir(commandPath.c_str(), mode)) {
-        PLOG(ERROR) << __func__ << "(): mkdir failed for " << commandPath;
-        return -errno;
+    if (auto res = makeDir(commandPath.c_str(), mode, false)) {
+        LOG(ERROR) << __func__ << "(): mkdir failed for " << commandPath << " - " << res;
+        return res;
     }
-    if (::chmod(path, mode)) {
-        PLOG(WARNING) << "[incfs] couldn't change the directory mode to 0" << std::oct << mode;
-    }
-
     return 0;
+}
+
+IncFsErrorCode IncFs_MakeDirs(const IncFsControl* control, const char* path, int32_t mode) {
+    if (!control) {
+        return -EINVAL;
+    }
+    const auto root = rootForCmd(control->cmd);
+    if (root.empty()) {
+        LOG(ERROR) << __func__ << "(): root is empty for " << path;
+        return -EINVAL;
+    }
+    auto commandPath = makeCommandPath(root, path);
+    if (commandPath.empty()) {
+        LOG(ERROR) << __func__ << "(): commandPath is empty for " << path;
+        return -EINVAL;
+    }
+    return makeDirs(commandPath, path, root, mode);
 }
 
 static IncFsErrorCode getMetadata(const char* path, char buffer[], size_t* bufferSize) {

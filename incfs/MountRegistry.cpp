@@ -179,11 +179,13 @@ void MountRegistry::Mounts::moveBind(std::string_view src, std::string_view dest
         roots[root].path = destAbsolute;
     }
 
-    const auto newRootIt =
-            rootByBindPoint
-                    .insert_or_assign(std::move(destAbsolute),
-                                      std::pair{std::move(rootIt->second.first), root})
-                    .first;
+    // const_cast<> here is safe as we're erasing that element on the next line.
+    const auto newRootIt = rootByBindPoint
+                                   .insert_or_assign(std::move(destAbsolute),
+                                                     std::pair{std::move(const_cast<std::string&>(
+                                                                       rootIt->second.first)),
+                                                               root})
+                                   .first;
     rootByBindPoint.erase(rootIt);
     const auto bindIt = std::find(roots[root].binds.begin(), roots[root].binds.end(), rootIt);
     *bindIt = newRootIt;
