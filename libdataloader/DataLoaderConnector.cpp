@@ -748,24 +748,15 @@ bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
     return true;
 }
 
-bool DataLoaderService_OnStop(JNIEnv* env, jint storageId) {
-    auto reportStopped = [env, storageId](jobject listener) {
-        const auto& jni = jniIds(env);
-        reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_STOPPED);
-    };
-    std::unique_ptr<_jobject, decltype(reportStopped)> reportStoppedOnExit(nullptr, reportStopped);
-
+jobject DataLoaderService_OnStop_NoStatus(JNIEnv* env, jint storageId) {
     const UniqueControl* control;
     {
         std::lock_guard lock{globals().dataLoaderConnectorsLock};
         auto dlIt = globals().dataLoaderConnectors.find(storageId);
         if (dlIt == globals().dataLoaderConnectors.end()) {
-            ALOGE("Failed to stop id(%d): not found", storageId);
-            return false;
+            return nullptr;
         }
         control = &(dlIt->second->control());
-
-        reportStoppedOnExit.reset(dlIt->second->listener());
     }
 
     if (control->cmd() >= 0) {
@@ -777,43 +768,57 @@ bool DataLoaderService_OnStop(JNIEnv* env, jint storageId) {
         logLooper().wake();
     }
 
+    jobject listener = nullptr;
     {
         std::lock_guard lock{globals().dataLoaderConnectorsLock};
         auto dlIt = globals().dataLoaderConnectors.find(storageId);
         if (dlIt == globals().dataLoaderConnectors.end()) {
-            ALOGE("Failed to stop id(%d): not found", storageId);
-            return false;
+            ALOGI("Failed to stop id(%d): not found", storageId);
+            return nullptr;
         }
+
+        listener = env->NewLocalRef(dlIt->second->listener());
+
         auto&& dataLoaderConnector = dlIt->second;
-        if (dataLoaderConnector) {
-            dataLoaderConnector->onStop();
-        }
+        dataLoaderConnector->onStop();
     }
+    return listener;
+}
+
+bool DataLoaderService_OnStop(JNIEnv* env, jint storageId) {
+    auto listener = DataLoaderService_OnStop_NoStatus(env, storageId);
+    if (listener == nullptr) {
+        ALOGI("Failed to stop id(%d): not found", storageId);
+        return true;
+    }
+
+    const auto& jni = jniIds(env);
+    reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_STOPPED);
 
     return true;
 }
 
 bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId) {
-    DataLoaderService_OnStop(env, storageId);
-
-    auto reportDestroyed = [env, storageId](jobject listener) {
-        const auto& jni = jniIds(env);
-        reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_DESTROYED);
-    };
-    std::unique_ptr<_jobject, decltype(reportDestroyed)> reportDestroyedOnExit(nullptr,
-                                                                               reportDestroyed);
-
-    std::lock_guard lock{globals().dataLoaderConnectorsLock};
-    auto dlIt = globals().dataLoaderConnectors.find(storageId);
-    if (dlIt == globals().dataLoaderConnectors.end()) {
-        ALOGI("Failed to remove id(%d): not found", storageId);
+    jobject listener = DataLoaderService_OnStop_NoStatus(env, storageId);
+    if (!listener) {
         return true;
     }
-    reportDestroyedOnExit.reset(env->NewLocalRef(dlIt->second->listener()));
 
-    auto&& dataLoaderConnector = dlIt->second;
-    dataLoaderConnector->onDestroy();
-    globals().dataLoaderConnectors.erase(dlIt);
+    {
+        std::lock_guard lock{globals().dataLoaderConnectorsLock};
+        auto dlIt = globals().dataLoaderConnectors.find(storageId);
+        if (dlIt == globals().dataLoaderConnectors.end()) {
+            ALOGI("Failed to remove id(%d): not found", storageId);
+            return true;
+        }
+
+        auto&& dataLoaderConnector = dlIt->second;
+        dataLoaderConnector->onDestroy();
+        globals().dataLoaderConnectors.erase(dlIt);
+    }
+
+    const auto& jni = jniIds(env);
+    reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_DESTROYED);
 
     return true;
 }
