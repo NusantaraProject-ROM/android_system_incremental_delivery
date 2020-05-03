@@ -674,8 +674,8 @@ IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int
                       << " of " << params.size << " bytes";
         return -errno;
     }
-    if (::chmod(path, mode)) {
-        PLOG(WARNING) << "[incfs] couldn't change the file mode to 0" << std::oct << mode;
+    if (::chmod(path::join(root, subpath).c_str(), mode)) {
+        PLOG(WARNING) << "[incfs] couldn't change file mode to 0" << std::oct << mode;
     }
 
     return 0;
@@ -684,7 +684,7 @@ IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int
 static IncFsErrorCode makeDir(const char* commandPath, int32_t mode, bool allowExisting) {
     if (!::mkdir(commandPath, mode)) {
         if (::chmod(commandPath, mode)) {
-            PLOG(WARNING) << "[incfs] couldn't change the directory mode to 0" << std::oct << mode;
+            PLOG(WARNING) << "[incfs] couldn't change directory mode to 0" << std::oct << mode;
         }
         return 0;
     }
