@@ -188,6 +188,8 @@ IncFsErrorCode IncFs_Link(const IncFsControl* control, const char* sourcePath,
                           const char* targetPath);
 IncFsErrorCode IncFs_Unlink(const IncFsControl* control, const char* path);
 
+IncFsErrorCode IncFs_DropPendingReads(const IncFsControl* control);
+
 IncFsErrorCode IncFs_WaitForPendingReads(const IncFsControl* control, int32_t timeoutMs,
                                          IncFsReadInfo buffer[], size_t* bufferSize);
 IncFsErrorCode IncFs_WaitForPageReads(const IncFsControl* control, int32_t timeoutMs,

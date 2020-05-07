@@ -973,9 +973,24 @@ static int waitForReads(int fd, int32_t timeoutMs, incfs_pending_read_info pendi
     return 0;
 }
 
+IncFsErrorCode IncFs_DropPendingReads(const IncFsControl* control) {
+    if (!control || control->pendingReads < 0) {
+        return -EINVAL;
+    }
+
+    incfs_pending_read_info buffer[INCFS_DEFAULT_PENDING_READ_BUFFER_SIZE];
+    auto res = ::read(control->pendingReads, buffer, sizeof(buffer));
+    if (res < 0) {
+        const auto error = errno;
+        PLOG(ERROR) << "read() failed";
+        return -error;
+    }
+    return res % sizeof(*buffer);
+}
+
 IncFsErrorCode IncFs_WaitForPendingReads(const IncFsControl* control, int32_t timeoutMs,
                                          IncFsReadInfo buffer[], size_t* bufferSize) {
-    if (!control) {
+    if (!control || control->pendingReads < 0) {
         return -EINVAL;
     }
 
