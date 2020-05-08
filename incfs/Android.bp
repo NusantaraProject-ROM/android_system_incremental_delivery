@@ -11,6 +11,7 @@ cc_defaults {
     export_header_lib_headers: ["libincfs_headers"],
     static_libs: [
         "libbase",
+        "com.android.sysprop.incremental",
     ],
     shared_libs: [
         "libcrypto",
