@@ -23,7 +23,6 @@
 #include <android-base/logging.h>
 #include <android-base/no_destructor.h>
 #include <android-base/parsebool.h>
-#include <android-base/properties.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
