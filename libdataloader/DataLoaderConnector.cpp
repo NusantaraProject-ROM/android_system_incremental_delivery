@@ -709,13 +709,16 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
 }
 
 bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
-    auto reportUnavailable = [env, storageId](jobject listener) {
+    auto destroyAndReportUnavailable = [env, storageId](jobject listener) {
+        // Because of the MT the installer can call commit and recreate/restart dataLoader before
+        // system server has a change to destroy it.
+        DataLoaderService_OnDestroy(env, storageId);
         const auto& jni = jniIds(env);
         reportStatusViaCallback(env, listener, storageId, jni.constants.DATA_LOADER_UNAVAILABLE);
     };
     // By default, it's disabled. Need to assign listener to enable.
-    std::unique_ptr<_jobject, decltype(reportUnavailable)>
-            reportUnavailableOnExit(nullptr, reportUnavailable);
+    std::unique_ptr<_jobject, decltype(destroyAndReportUnavailable)>
+            destroyAndReportUnavailableOnExit(nullptr, destroyAndReportUnavailable);
 
     const UniqueControl* control;
     jobject listener;
@@ -733,7 +736,7 @@ bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
         dataLoaderConnector = dlIt->second;
         if (!dataLoaderConnector->onStart()) {
             ALOGE("Failed to start id(%d): onStart returned false", storageId);
-            reportUnavailableOnExit.reset(listener);
+            destroyAndReportUnavailableOnExit.reset(listener);
             return false;
         }
 
@@ -820,23 +823,32 @@ bool DataLoaderService_OnStop(JNIEnv* env, jint storageId) {
     return true;
 }
 
-bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId) {
+jobject DataLoaderService_OnDestroy_NoStatus(JNIEnv* env, jint storageId) {
     jobject listener = DataLoaderService_OnStop_NoStatus(env, storageId);
     if (!listener) {
-        return true;
+        return nullptr;
     }
 
     {
         std::lock_guard lock{globals().dataLoaderConnectorsLock};
         auto dlIt = globals().dataLoaderConnectors.find(storageId);
         if (dlIt == globals().dataLoaderConnectors.end()) {
-            ALOGI("Failed to remove id(%d): not found", storageId);
-            return true;
+            return nullptr;
         }
 
         auto&& dataLoaderConnector = dlIt->second;
         dataLoaderConnector->onDestroy();
         globals().dataLoaderConnectors.erase(dlIt);
+    }
+
+    return listener;
+}
+
+bool DataLoaderService_OnDestroy(JNIEnv* env, jint storageId) {
+    jobject listener = DataLoaderService_OnDestroy_NoStatus(env, storageId);
+    if (!listener) {
+        ALOGI("Failed to remove id(%d): not found", storageId);
+        return true;
     }
 
     const auto& jni = jniIds(env);
