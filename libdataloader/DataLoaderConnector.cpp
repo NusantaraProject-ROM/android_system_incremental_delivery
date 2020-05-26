@@ -241,7 +241,7 @@ struct Globals {
     DataLoaderConnectorsMap dataLoaderConnectors GUARDED_BY(dataLoaderConnectorsLock);
 
     std::atomic_bool stopped;
-    std::thread cmdLooperThread;
+    std::thread pendingReadsLooperThread;
     std::thread logLooperThread;
     std::vector<ReadInfo> pendingReads;
     std::vector<ReadInfo> pageReads;
@@ -257,9 +257,9 @@ struct IncFsLooper : public android::Looper {
     ~IncFsLooper() {}
 };
 
-static android::Looper& cmdLooper() {
-    static IncFsLooper cmdLooper;
-    return cmdLooper;
+static android::Looper& pendingReadsLooper() {
+    static IncFsLooper pendingReadsLooper;
+    return pendingReadsLooper;
 }
 
 static android::Looper& logLooper() {
@@ -351,7 +351,7 @@ public:
         // Stopping both loopers and waiting for them to exit - we should be able to acquire/release
         // both mutexes.
         mRunning = false;
-        std::lock_guard{mCmdLooperBusy}; // NOLINT
+        std::lock_guard{mPendingReadsLooperBusy}; // NOLINT
         std::lock_guard{mLogLooperBusy}; // NOLINT
 
         mDataLoader->onStop(mDataLoader);
@@ -373,9 +373,9 @@ public:
         return result;
     }
 
-    int onCmdLooperEvent(std::vector<ReadInfo>& pendingReads) {
+    int onPendingReadsLooperEvent(std::vector<ReadInfo>& pendingReads) {
         CHECK(mDataLoader);
-        std::lock_guard lock{mCmdLooperBusy};
+        std::lock_guard lock{mPendingReadsLooperBusy};
         while (mRunning.load(std::memory_order_relaxed)) {
             pendingReads.resize(kPendingReadsBufferSize);
             if (android::incfs::waitForPendingReads(mControl, 0ms, &pendingReads) !=
@@ -475,18 +475,18 @@ private:
 
     ::DataLoader* mDataLoader = nullptr;
 
-    std::mutex mCmdLooperBusy;
+    std::mutex mPendingReadsLooperBusy;
     std::mutex mLogLooperBusy;
     std::atomic<bool> mRunning{false};
 };
 
-static int onCmdLooperEvent(int fd, int events, void* data) {
+static int onPendingReadsLooperEvent(int fd, int events, void* data) {
     if (globals().stopped) {
         // No more listeners.
         return 0;
     }
     auto&& dataLoaderConnector = (DataLoaderConnector*)data;
-    return dataLoaderConnector->onCmdLooperEvent(globals().pendingReads);
+    return dataLoaderConnector->onPendingReadsLooperEvent(globals().pendingReads);
 }
 
 static int onLogLooperEvent(int fd, int events, void* data) {
@@ -560,10 +560,10 @@ DataLoaderParamsPair DataLoaderParamsPair::createFromManaged(JNIEnv* env, jobjec
                                                                       std::move(arguments)));
 }
 
-static void cmdLooperThread() {
+static void pendingReadsLooperThread() {
     constexpr auto kTimeoutMsecs = 60 * 1000;
     while (!globals().stopped) {
-        cmdLooper().pollAll(kTimeoutMsecs);
+        pendingReadsLooper().pollAll(kTimeoutMsecs);
     }
 }
 
@@ -662,6 +662,8 @@ bool DataLoaderService_OnCreate(JNIEnv* env, jobject service, jint storageId, jo
     auto nativeControl = createIncFsControlFromManaged(env, control);
     ALOGI("DataLoader::create1 cmd: %d|%s", nativeControl.cmd(),
           pathFromFd(nativeControl.cmd()).c_str());
+    ALOGI("DataLoader::create1 pendingReads: %d|%s", nativeControl.pendingReads(),
+          pathFromFd(nativeControl.pendingReads()).c_str());
     ALOGI("DataLoader::create1 log: %d|%s", nativeControl.logs(),
           pathFromFd(nativeControl.logs()).c_str());
 
@@ -743,9 +745,9 @@ bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
         control = &(dataLoaderConnector->control());
 
         // Create loopers while we are under lock.
-        if (control->cmd() >= 0 && !globals().cmdLooperThread.joinable()) {
-            cmdLooper();
-            globals().cmdLooperThread = std::thread(&cmdLooperThread);
+        if (control->pendingReads() >= 0 && !globals().pendingReadsLooperThread.joinable()) {
+            pendingReadsLooper();
+            globals().pendingReadsLooperThread = std::thread(&pendingReadsLooperThread);
         }
         if (control->logs() >= 0 && !globals().logLooperThread.joinable()) {
             logLooper();
@@ -753,11 +755,11 @@ bool DataLoaderService_OnStart(JNIEnv* env, jint storageId) {
         }
     }
 
-    if (control->cmd() >= 0) {
-        cmdLooper().addFd(control->cmd(), android::Looper::POLL_CALLBACK,
-                          android::Looper::EVENT_INPUT, &onCmdLooperEvent,
-                          dataLoaderConnector.get());
-        cmdLooper().wake();
+    if (control->pendingReads() >= 0) {
+        pendingReadsLooper().addFd(control->pendingReads(), android::Looper::POLL_CALLBACK,
+                                   android::Looper::EVENT_INPUT, &onPendingReadsLooperEvent,
+                                   dataLoaderConnector.get());
+        pendingReadsLooper().wake();
     }
 
     if (control->logs() >= 0) {
@@ -784,9 +786,9 @@ jobject DataLoaderService_OnStop_NoStatus(JNIEnv* env, jint storageId) {
         control = &(dlIt->second->control());
     }
 
-    if (control->cmd() >= 0) {
-        cmdLooper().removeFd(control->cmd());
-        cmdLooper().wake();
+    if (control->pendingReads() >= 0) {
+        pendingReadsLooper().removeFd(control->pendingReads());
+        pendingReadsLooper().wake();
     }
     if (control->logs() >= 0) {
         logLooper().removeFd(control->logs());
