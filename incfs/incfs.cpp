@@ -403,6 +403,22 @@ IncFsFileId IncFs_FileIdFromMetadata(IncFsSpan metadata) {
     return id;
 }
 
+static bool restoreconControlFiles(std::string_view targetDir) {
+    const std::string controlFilePaths[] = {path::join(targetDir, INCFS_PENDING_READS_FILENAME),
+                                            path::join(targetDir, INCFS_LOG_FILENAME)};
+    for (size_t i = 0; i < std::size(controlFilePaths); i++) {
+        if (const auto err = selinux_android_restorecon(controlFilePaths[i].c_str(),
+                                                        SELINUX_ANDROID_RESTORECON_FORCE);
+            err != 0) {
+            PLOG(ERROR) << "[incfs] Failed to restorecon: " << controlFilePaths[i]
+                        << " error code: " << err;
+            errno = -err;
+            return false;
+        }
+    }
+    return true;
+}
+
 IncFsControl* IncFs_Mount(const char* backingPath, const char* targetDir,
                           IncFsMountOptions options) {
     if (!init().enabledAndReady()) {
@@ -440,10 +456,7 @@ IncFsControl* IncFs_Mount(const char* backingPath, const char* targetDir,
         return nullptr;
     }
 
-    if (const auto err = selinux_android_restorecon(targetDir, SELINUX_ANDROID_RESTORECON_RECURSE);
-        err != 0) {
-        PLOG(ERROR) << "[incfs] Failed to restorecon: " << err;
-        errno = -err;
+    if (!restoreconControlFiles(targetDir)) {
         return nullptr;
     }
 
