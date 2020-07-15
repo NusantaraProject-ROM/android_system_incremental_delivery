@@ -939,14 +939,14 @@ IncFsErrorCode IncFs_Unlink(const IncFsControl* control, const char* path) {
 
 static int waitForReads(int fd, int32_t timeoutMs, incfs_pending_read_info pendingReadsBuffer[],
                         size_t* pendingReadsBufferSize) {
-    using namespace std::chrono;
-    auto hrTimeout = steady_clock::duration(milliseconds(timeoutMs));
+    auto hrTimeout = std::chrono::steady_clock::duration(std::chrono::milliseconds(timeoutMs));
 
     while (hrTimeout > hrTimeout.zero() || (!pendingReadsBuffer && hrTimeout == hrTimeout.zero())) {
-        const auto startTs = steady_clock::now();
+        const auto startTs = std::chrono::steady_clock::now();
 
         pollfd pfd = {fd, POLLIN, 0};
-        const auto res = ::poll(&pfd, 1, duration_cast<milliseconds>(hrTimeout).count());
+        const auto res =
+                ::poll(&pfd, 1, duration_cast<std::chrono::milliseconds>(hrTimeout).count());
         if (res > 0) {
             break;
         }
@@ -961,7 +961,7 @@ static int waitForReads(int fd, int32_t timeoutMs, incfs_pending_read_info pendi
             PLOG(ERROR) << "poll() failed";
             return -error;
         }
-        hrTimeout -= steady_clock::now() - startTs;
+        hrTimeout -= std::chrono::steady_clock::now() - startTs;
     }
     if (!pendingReadsBuffer) {
         return hrTimeout < hrTimeout.zero() ? -ETIMEDOUT : 0;
