@@ -53,7 +53,6 @@
 #include "path.h"
 
 using namespace std::literals;
-using namespace android::incfs;
 namespace ab = android::base;
 
 struct IncFsControl final {
@@ -64,13 +63,13 @@ struct IncFsControl final {
           : cmd(cmd), pendingReads(pendingReads), logs(logs) {}
 };
 
-static MountRegistry& registry() {
-    static ab::NoDestructor<MountRegistry> instance{};
+static android::incfs::MountRegistry& registry() {
+    static ab::NoDestructor<android::incfs::MountRegistry> instance{};
     return *instance;
 }
 
 static ab::unique_fd openRaw(std::string_view file) {
-    auto fd = ab::unique_fd(::open(details::c_str(file), O_RDONLY | O_CLOEXEC));
+    auto fd = ab::unique_fd(::open(android::incfs::details::c_str(file), O_RDONLY | O_CLOEXEC));
     if (fd < 0) {
         return ab::unique_fd{-errno};
     }
@@ -78,21 +77,21 @@ static ab::unique_fd openRaw(std::string_view file) {
 }
 
 static ab::unique_fd openRaw(std::string_view dir, std::string_view name) {
-    return openRaw(path::join(dir, name));
+    return openRaw(android::incfs::path::join(dir, name));
 }
 
 static std::string rootForCmd(int fd) {
-    auto cmdFile = path::fromFd(fd);
+    auto cmdFile = android::incfs::path::fromFd(fd);
     if (cmdFile.empty()) {
         LOG(INFO) << __func__ << "(): name empty for " << fd;
         return {};
     }
-    auto res = path::dirName(cmdFile);
+    auto res = android::incfs::path::dirName(cmdFile);
     if (res.empty()) {
         LOG(INFO) << __func__ << "(): dirname empty for " << cmdFile;
         return {};
     }
-    if (!path::endsWith(cmdFile, INCFS_PENDING_READS_FILENAME)) {
+    if (!android::incfs::path::endsWith(cmdFile, INCFS_PENDING_READS_FILENAME)) {
         LOG(INFO) << __func__ << "(): invalid file name " << cmdFile;
         return {};
     }
@@ -103,24 +102,24 @@ static std::string rootForCmd(int fd) {
     return std::string(res);
 }
 
-static Features readIncFsFeatures() {
+static android::incfs::Features readIncFsFeatures() {
     static const char kSysfsFeaturesDir[] = "/sys/fs/" INCFS_NAME "/features";
-    const auto dir = path::openDir(kSysfsFeaturesDir);
+    const auto dir = android::incfs::path::openDir(kSysfsFeaturesDir);
     if (!dir) {
-        return Features::none;
+        return android::incfs::Features::none;
     }
 
-    int res = Features::none;
+    int res = android::incfs::Features::none;
     while (auto entry = ::readdir(dir.get())) {
         if (entry->d_type != DT_REG) {
             continue;
         }
         if (entry->d_name == "corefs"sv) {
-            res |= Features::core;
+            res |= android::incfs::Features::core;
         }
     }
 
-    return Features(res);
+    return android::incfs::Features(res);
 }
 
 IncFsFeatures IncFs_Features() {
@@ -155,7 +154,7 @@ static std::pair<bool, std::string_view> parseProperty(std::string_view property
     static const auto kModulePrefix = "module:"sv;
     if (property.starts_with(kModulePrefix)) {
         const auto modulePath = property.substr(kModulePrefix.size());
-        return {::access(details::c_str(modulePath), R_OK | X_OK), modulePath};
+        return {::access(android::incfs::details::c_str(modulePath), R_OK | X_OK), modulePath};
     }
     return {false, {}};
 }
@@ -185,8 +184,9 @@ public:
             return true;
         }
         std::call_once(loadedFlag_, [this] {
-            const ab::unique_fd fd(TEMP_FAILURE_RETRY(
-                    ::open(details::c_str(moduleName_), O_RDONLY | O_NOFOLLOW | O_CLOEXEC)));
+            const ab::unique_fd fd(
+                    TEMP_FAILURE_RETRY(::open(android::incfs::details::c_str(moduleName_),
+                                              O_RDONLY | O_NOFOLLOW | O_CLOEXEC)));
             if (fd < 0) {
                 PLOG(ERROR) << "could not open IncFs kernel module \"" << moduleName_ << '"';
                 return;
@@ -261,14 +261,14 @@ static int isValidMountTarget(const char* path) {
     if (const auto err = isDir(path); err != 0) {
         return err;
     }
-    if (const auto err = path::isEmptyDir(path); err != 0) {
+    if (const auto err = android::incfs::path::isEmptyDir(path); err != 0) {
         return err;
     }
     return 0;
 }
 
 static int rmDirContent(const char* path) {
-    auto dir = path::openDir(path);
+    auto dir = android::incfs::path::openDir(path);
     if (!dir) {
         return -EINVAL;
     }
@@ -327,7 +327,7 @@ static std::string makeCommandPath(std::string_view root, std::string_view item)
         return {};
     }
     // TODO: add "/.cmd/" if we decide to use a separate control tree.
-    return path::join(itemRoot, subpath);
+    return android::incfs::path::join(itemRoot, subpath);
 }
 
 static void toString(IncFsFileId id, char* out) {
@@ -404,8 +404,9 @@ IncFsFileId IncFs_FileIdFromMetadata(IncFsSpan metadata) {
 }
 
 static bool restoreconControlFiles(std::string_view targetDir) {
-    const std::string controlFilePaths[] = {path::join(targetDir, INCFS_PENDING_READS_FILENAME),
-                                            path::join(targetDir, INCFS_LOG_FILENAME)};
+    const std::string controlFilePaths[] =
+            {android::incfs::path::join(targetDir, INCFS_PENDING_READS_FILENAME),
+             android::incfs::path::join(targetDir, INCFS_LOG_FILENAME)};
     for (size_t i = 0; i < std::size(controlFilePaths); i++) {
         if (const auto err = selinux_android_restorecon(controlFilePaths[i].c_str(),
                                                         SELINUX_ANDROID_RESTORECON_FORCE);
@@ -436,8 +437,8 @@ IncFsControl* IncFs_Mount(const char* backingPath, const char* targetDir,
         return nullptr;
     }
 
-    if (options.flags & createOnly) {
-        if (const auto err = path::isEmptyDir(backingPath); err != 0) {
+    if (options.flags & android::incfs::createOnly) {
+        if (const auto err = android::incfs::path::isEmptyDir(backingPath); err != 0) {
             errno = -err;
             return nullptr;
         }
@@ -473,7 +474,7 @@ IncFsControl* IncFs_Open(const char* dir) {
         errno = EINVAL;
         return nullptr;
     }
-    return makeControl(details::c_str(root));
+    return makeControl(android::incfs::details::c_str(root));
 }
 
 IncFsFd IncFs_GetControlFd(const IncFsControl* control, IncFsFdType type) {
@@ -664,7 +665,7 @@ IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int
         return -ERANGE;
     }
 
-    const auto [subdir, name] = path::splitDirBase(subpath);
+    const auto [subdir, name] = android::incfs::path::splitDirBase(subpath);
     incfs_new_file_args args = {
             .size = (uint64_t)params.size,
             .mode = (uint16_t)mode,
@@ -687,7 +688,7 @@ IncFsErrorCode IncFs_MakeFile(const IncFsControl* control, const char* path, int
                       << " of " << params.size << " bytes";
         return -errno;
     }
-    if (::chmod(path::join(root, subpath).c_str(), mode)) {
+    if (::chmod(android::incfs::path::join(root, subpath).c_str(), mode)) {
         PLOG(WARNING) << "[incfs] couldn't change file mode to 0" << std::oct << mode;
     }
 
@@ -707,7 +708,7 @@ static IncFsErrorCode makeDir(const char* commandPath, int32_t mode, bool allowE
 
 static IncFsErrorCode makeDirs(std::string_view commandPath, std::string_view path,
                                std::string_view root, int32_t mode) {
-    auto commandCPath = details::c_str(commandPath);
+    auto commandCPath = android::incfs::details::c_str(commandPath);
     const auto mkdirRes = makeDir(commandCPath, mode, true);
     if (!mkdirRes) {
         return 0;
@@ -717,13 +718,13 @@ static IncFsErrorCode makeDirs(std::string_view commandPath, std::string_view pa
         return mkdirRes;
     }
 
-    const auto parent = path::dirName(commandPath);
-    if (!path::startsWith(parent, root)) {
+    const auto parent = android::incfs::path::dirName(commandPath);
+    if (!android::incfs::path::startsWith(parent, root)) {
         // went too far, already out of the root mount
         return -EINVAL;
     }
 
-    if (auto parentMkdirRes = makeDirs(parent, path::dirName(path), root, mode)) {
+    if (auto parentMkdirRes = makeDirs(parent, android::incfs::path::dirName(path), root, mode)) {
         return parentMkdirRes;
     }
     return makeDir(commandCPath, mode, true);
@@ -768,10 +769,10 @@ IncFsErrorCode IncFs_MakeDirs(const IncFsControl* control, const char* path, int
 }
 
 static IncFsErrorCode getMetadata(const char* path, char buffer[], size_t* bufferSize) {
-    const auto res = ::getxattr(path, kMetadataAttrName, buffer, *bufferSize);
+    const auto res = ::getxattr(path, android::incfs::kMetadataAttrName, buffer, *bufferSize);
     if (res < 0) {
         if (errno == ERANGE) {
-            auto neededSize = ::getxattr(path, kMetadataAttrName, buffer, 0);
+            auto neededSize = ::getxattr(path, android::incfs::kMetadataAttrName, buffer, 0);
             if (neededSize >= 0) {
                 *bufferSize = neededSize;
                 return 0;
@@ -793,8 +794,8 @@ IncFsErrorCode IncFs_GetMetadataById(const IncFsControl* control, IncFsFileId fi
     if (root.empty()) {
         return -EINVAL;
     }
-    auto name = path::join(root, kIndexDir, toStringImpl(fileId));
-    return getMetadata(details::c_str(name), buffer, bufferSize);
+    auto name = android::incfs::path::join(root, android::incfs::kIndexDir, toStringImpl(fileId));
+    return getMetadata(android::incfs::details::c_str(name), buffer, bufferSize);
 }
 
 IncFsErrorCode IncFs_GetMetadataByPath(const IncFsControl* control, const char* path, char buffer[],
@@ -822,7 +823,7 @@ IncFsFileId IncFs_GetId(const IncFsControl* control, const char* path) {
         return kIncFsInvalidFileId;
     }
     char buffer[kIncFsFileIdStringLength];
-    const auto res = ::getxattr(path, kIdAttrName, buffer, sizeof(buffer));
+    const auto res = ::getxattr(path, android::incfs::kIdAttrName, buffer, sizeof(buffer));
     if (res != sizeof(buffer)) {
         return kIncFsInvalidFileId;
     }
@@ -856,7 +857,7 @@ IncFsErrorCode IncFs_GetSignatureById(const IncFsControl* control, IncFsFileId f
     if (root.empty()) {
         return -EINVAL;
     }
-    auto file = path::join(root, kIndexDir, toStringImpl(fileId));
+    auto file = android::incfs::path::join(root, android::incfs::kIndexDir, toStringImpl(fileId));
     auto fd = openRaw(file);
     if (fd < 0) {
         return fd.get();
@@ -1072,7 +1073,7 @@ IncFsFd IncFs_OpenForSpecialOpsById(const IncFsControl* control, IncFsFileId id)
     if (root.empty()) {
         return -EINVAL;
     }
-    auto name = path::join(root, kIndexDir, toStringImpl(id));
+    auto name = android::incfs::path::join(root, android::incfs::kIndexDir, toStringImpl(id));
     return openForSpecialOps(cmd, makeCommandPath(root, name).c_str());
 }
 
@@ -1143,7 +1144,7 @@ IncFsErrorCode IncFs_WriteBlocks(const IncFsDataBlock blocks[], size_t blocksCou
 }
 
 IncFsErrorCode IncFs_BindMount(const char* sourceDir, const char* targetDir) {
-    if (!enabled()) {
+    if (!android::incfs::enabled()) {
         return -ENOTSUP;
     }
 
@@ -1169,7 +1170,7 @@ IncFsErrorCode IncFs_BindMount(const char* sourceDir, const char* targetDir) {
 }
 
 IncFsErrorCode IncFs_Unmount(const char* dir) {
-    if (!enabled()) {
+    if (!android::incfs::enabled()) {
         return -ENOTSUP;
     }
 
@@ -1335,6 +1336,6 @@ IncFsErrorCode IncFs_IsFullyLoaded(int fd) {
     return -ENODATA;
 }
 
-MountRegistry& android::incfs::defaultMountRegistry() {
+android::incfs::MountRegistry& android::incfs::defaultMountRegistry() {
     return registry();
 }
