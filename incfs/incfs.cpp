@@ -53,7 +53,9 @@
 #include "path.h"
 
 using namespace std::literals;
-namespace ab = android::base;
+
+using android::base::StringPrintf;
+using android::base::unique_fd;
 
 struct IncFsControl final {
     IncFsFd cmd;
@@ -64,19 +66,19 @@ struct IncFsControl final {
 };
 
 static android::incfs::MountRegistry& registry() {
-    static ab::NoDestructor<android::incfs::MountRegistry> instance{};
+    static android::base::NoDestructor<android::incfs::MountRegistry> instance{};
     return *instance;
 }
 
-static ab::unique_fd openRaw(std::string_view file) {
-    auto fd = ab::unique_fd(::open(android::incfs::details::c_str(file), O_RDONLY | O_CLOEXEC));
+static unique_fd openRaw(std::string_view file) {
+    auto fd = unique_fd(::open(android::incfs::details::c_str(file), O_RDONLY | O_CLOEXEC));
     if (fd < 0) {
-        return ab::unique_fd{-errno};
+        return unique_fd{-errno};
     }
     return fd;
 }
 
-static ab::unique_fd openRaw(std::string_view dir, std::string_view name) {
+static unique_fd openRaw(std::string_view dir, std::string_view name) {
     return openRaw(android::incfs::path::join(dir, name));
 }
 
@@ -129,24 +131,24 @@ IncFsFeatures IncFs_Features() {
 static bool isFsAvailable() {
     static const char kProcFilesystems[] = "/proc/filesystems";
     std::string filesystems;
-    if (!ab::ReadFileToString(kProcFilesystems, &filesystems)) {
+    if (!android::base::ReadFileToString(kProcFilesystems, &filesystems)) {
         return false;
     }
     return filesystems.find("\t" INCFS_NAME "\n") != std::string::npos;
 }
 
 static std::string_view incFsPropertyValue() {
-    static const ab::NoDestructor<std::string> kValue{
+    static const android::base::NoDestructor<std::string> kValue{
             android::sysprop::IncrementalProperties::enable().value_or("")};
     return *kValue;
 }
 
 static std::pair<bool, std::string_view> parseProperty(std::string_view property) {
-    auto boolVal = ab::ParseBool(property);
-    if (boolVal == ab::ParseBoolResult::kTrue) {
+    auto boolVal = android::base::ParseBool(property);
+    if (boolVal == android::base::ParseBoolResult::kTrue) {
         return {isFsAvailable(), {}};
     }
-    if (boolVal == ab::ParseBoolResult::kFalse) {
+    if (boolVal == android::base::ParseBoolResult::kFalse) {
         return {false, {}};
     }
 
@@ -184,7 +186,7 @@ public:
             return true;
         }
         std::call_once(loadedFlag_, [this] {
-            const ab::unique_fd fd(
+            const unique_fd fd(
                     TEMP_FAILURE_RETRY(::open(android::incfs::details::c_str(moduleName_),
                                               O_RDONLY | O_NOFOLLOW | O_CLOEXEC)));
             if (fd < 0) {
@@ -276,7 +278,7 @@ static int rmDirContent(const char* path) {
         if (entry->d_name == "."sv || entry->d_name == ".."sv) {
             continue;
         }
-        auto fullPath = ab::StringPrintf("%s/%s", path, entry->d_name);
+        auto fullPath = StringPrintf("%s/%s", path, entry->d_name);
         if (entry->d_type == DT_DIR) {
             if (const auto err = rmDirContent(fullPath.c_str()); err != 0) {
                 return err;
@@ -294,11 +296,11 @@ static int rmDirContent(const char* path) {
 }
 
 static std::string makeMountOptionsString(IncFsMountOptions options) {
-    return ab::StringPrintf("read_timeout_ms=%u,readahead=0,rlog_pages=%u,rlog_wakeup_cnt=1",
-                            unsigned(options.defaultReadTimeoutMs),
-                            unsigned(options.readLogBufferPages < 0
-                                             ? INCFS_DEFAULT_PAGE_READ_BUFFER_PAGES
-                                             : options.readLogBufferPages));
+    return StringPrintf("read_timeout_ms=%u,readahead=0,rlog_pages=%u,rlog_wakeup_cnt=1",
+                        unsigned(options.defaultReadTimeoutMs),
+                        unsigned(options.readLogBufferPages < 0
+                                         ? INCFS_DEFAULT_PAGE_READ_BUFFER_PAGES
+                                         : options.readLogBufferPages));
 }
 
 static IncFsControl* makeControl(const char* root) {
@@ -306,7 +308,7 @@ static IncFsControl* makeControl(const char* root) {
     if (!cmd.ok()) {
         return nullptr;
     }
-    ab::unique_fd pendingReads(fcntl(cmd.get(), F_DUPFD_CLOEXEC, cmd.get()));
+    unique_fd pendingReads(fcntl(cmd.get(), F_DUPFD_CLOEXEC, cmd.get()));
     if (!pendingReads.ok()) {
         return nullptr;
     }
@@ -1037,7 +1039,7 @@ IncFsErrorCode IncFs_WaitForPageReads(const IncFsControl* control, int32_t timeo
 }
 
 static IncFsFd openForSpecialOps(int cmd, const char* path) {
-    ab::unique_fd fd(::open(path, O_RDONLY | O_CLOEXEC));
+    unique_fd fd(::open(path, O_RDONLY | O_CLOEXEC));
     if (fd < 0) {
         return -errno;
     }
