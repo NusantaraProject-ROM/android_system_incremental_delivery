@@ -54,7 +54,6 @@
 
 using namespace std::literals;
 using namespace android::incfs;
-using namespace android::sysprop;
 namespace ab = android::base;
 
 struct IncFsControl final {
@@ -138,7 +137,8 @@ static bool isFsAvailable() {
 }
 
 static std::string_view incFsPropertyValue() {
-    static const ab::NoDestructor<std::string> kValue{IncrementalProperties::enable().value_or("")};
+    static const ab::NoDestructor<std::string> kValue{
+            android::sysprop::IncrementalProperties::enable().value_or("")};
     return *kValue;
 }
 
