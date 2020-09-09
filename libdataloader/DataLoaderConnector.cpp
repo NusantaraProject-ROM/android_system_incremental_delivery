@@ -31,7 +31,6 @@
 
 namespace {
 
-using namespace android::dataloader;
 using namespace std::literals;
 
 using FileId = android::incfs::FileId;
@@ -229,8 +228,8 @@ using DataLoaderConnectorsMap = std::unordered_map<int, DataLoaderConnectorPtr>;
 
 struct Globals {
     Globals() {
-        managedDataLoaderFactory = new details::DataLoaderFactoryImpl(
-                [](auto jvm, auto) { return std::make_unique<ManagedDataLoader>(jvm); });
+        managedDataLoaderFactory = new android::dataloader::details::DataLoaderFactoryImpl(
+                [](auto jvm, auto) { return std::make_unique<android::dataloader::ManagedDataLoader>(jvm); });
     }
 
     DataLoaderFactory* managedDataLoaderFactory = nullptr;
@@ -243,8 +242,8 @@ struct Globals {
     std::atomic_bool stopped;
     std::thread pendingReadsLooperThread;
     std::thread logLooperThread;
-    std::vector<ReadInfo> pendingReads;
-    std::vector<ReadInfo> pageReads;
+    std::vector<android::dataloader::ReadInfo> pendingReads;
+    std::vector<android::dataloader::ReadInfo> pageReads;
 };
 
 static Globals& globals() {
@@ -284,7 +283,7 @@ private:
 
 static constexpr auto kPendingReadsBufferSize = 256;
 
-class DataLoaderConnector : public FilesystemConnector, public StatusListener {
+class DataLoaderConnector : public android::dataloader::FilesystemConnector, public android::dataloader::StatusListener {
 public:
     DataLoaderConnector(JNIEnv* env, jobject service, jint storageId, UniqueControl control,
                         jobject serviceConnector, jobject callbackControl, jobject listener)
@@ -363,7 +362,7 @@ public:
         checkAndClearJavaException(__func__);
     }
 
-    bool onPrepareImage(const DataLoaderInstallationFiles& addedFiles) {
+    bool onPrepareImage(const android::dataloader::DataLoaderInstallationFiles& addedFiles) {
         CHECK(mDataLoader);
         bool result =
                 mDataLoader->onPrepareImage(mDataLoader, addedFiles.data(), addedFiles.size());
@@ -373,7 +372,7 @@ public:
         return result;
     }
 
-    int onPendingReadsLooperEvent(std::vector<ReadInfo>& pendingReads) {
+    int onPendingReadsLooperEvent(std::vector<android::dataloader::ReadInfo>& pendingReads) {
         CHECK(mDataLoader);
         std::lock_guard lock{mPendingReadsLooperBusy};
         while (mRunning.load(std::memory_order_relaxed)) {
@@ -387,7 +386,7 @@ public:
         }
         return 1;
     }
-    int onLogLooperEvent(std::vector<ReadInfo>& pageReads) {
+    int onLogLooperEvent(std::vector<android::dataloader::ReadInfo>& pageReads) {
         CHECK(mDataLoader);
         std::lock_guard lock{mLogLooperBusy};
         while (mRunning.load(std::memory_order_relaxed)) {
@@ -414,7 +413,7 @@ public:
         return android::incfs::openForSpecialOps(mControl, fid);
     }
 
-    int writeBlocks(Span<const IncFsDataBlock> blocks) const {
+    int writeBlocks(android::dataloader::Span<const IncFsDataBlock> blocks) const {
         return android::incfs::writeBlocks(blocks);
     }
 
